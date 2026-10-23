@@ -1,0 +1,3 @@
+# Copy to .dev.vars for LOCAL development only; use wrangler secret put remotely.
+BRIA_API_TOKEN=
+CUTOUT_CLOUD_TOKEN=

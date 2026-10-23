@@ -1,0 +1,46 @@
+/* Local snapshot of 3D_maker_web/src/styles/tokens.css, 2026-10-22.
+ * UI theme only; video background presets remain in App.tsx.
+ */
+:root {
+  --bg-page: #141412;
+  --bg-deep: #0f0f0e;
+  --bg-panel: #1a1a17;
+  --bg-field: #1e1e1b;
+  --bg-card: #22221f;
+  --bg-hover: #2b2b27;
+  --line: #2b2b27;
+  --line-strong: #373733;
+  --tx-hi: #f8f6f2;
+  --tx-body: #ece9e3;
+  --tx-sub: #a7a39a;
+  --tx-dim: #817e77;
+  --brand: #ff5b0a;
+  --brand-bright: #ff7430;
+  --brand-press: #e94b00;
+  --brand-button: #c74305;
+  --brand-button-hover: #b83b00;
+  --brand-button-press: #b23d00;
+  --brand-soft: #ffa96e;
+  --brand-bg: rgba(85, 16, 0, .24);
+  /* Dark labels meet normal-text contrast on the platform's orange. */
+  --on-brand: #141412;
+  --green: #5ed796;
+  --red: #ff6b5b;
+  --yellow: #f5d76b;
+  --overlay: rgba(15, 15, 14, .92);
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-pill: 999px;
+  --font: "Outfit", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --fs-md: 14px;
+  --fs-sm: 12px;
+  --ctrl-h: 32px;
+  --ctrl-h-lg: 40px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+}

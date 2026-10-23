@@ -1,0 +1,26 @@
+{
+  "name": "bria-video-cutout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev -w apps/api\" \"npm:dev -w apps/web\"",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web && npm run typecheck -w apps/worker",
+    "build": "npm run build -w apps/api && npm run build -w apps/web && npm run build -w apps/worker",
+    "test": "npm run build -w apps/worker && node --import tsx --test --test-concurrency=1 tests/*.test.ts apps/worker/tests/*.test.ts",
+    "test:local": "node --import tsx --test tests/*.test.ts",
+    "test:worker": "npm run build -w apps/worker && node --import tsx --test apps/worker/tests/*.test.ts",
+    "dev:worker": "npm run dev -w apps/worker"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0"
+  }
+}
