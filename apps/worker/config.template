@@ -1,3 +1,9 @@
 # Copy to .dev.vars for LOCAL development only; use wrangler secret put remotely.
 BRIA_API_TOKEN=
 CUTOUT_CLOUD_TOKEN=
+# Browser development only: honored exclusively on loopback request hostnames.
+DEV_AUTH=1
+# Production uses token sessions; access remains an optional mode.
+AUTH_MODE=token
+ACCESS_TEAM_DOMAIN=
+ACCESS_AUD=

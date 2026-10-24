@@ -1,6 +1,6 @@
 # QA / 验收
 
-日期：2026-10-22。官方约束与工程选择见 [SOURCES.md](./SOURCES.md)。以下区分模拟协议测试、真实 Bria 调用、浏览器运行和视觉/设备验收。
+以下旧版记录日期：2026-10-22；最新浏览器迁移验证见本页末尾及 PROGRESS.md。官方约束与工程选择见 [SOURCES.md](./SOURCES.md)。以下区分模拟协议测试、真实 Bria 调用、浏览器运行和视觉/设备验收。
 
 ## 静态与本地集成
 
@@ -104,3 +104,22 @@
 - `verify-guides-progress.mjs`、`verify-history.mjs`、`verify-dropzone.mjs` 通过，API 请求被 mock 拦截，无 Bria 调用。
 - 已查看 `.tmp/ui-style/copy-desktop.png` 与 `copy-mobile.png`，分别为桌面自动识别与窄屏点选模式；素材建议、导出规则、模式操作文字正常换行。
 - 390px 页面及桌面 CSS 200% 缩放时，页面内容宽度未超过视口；CSS 缩放不替代浏览器原生缩放验收。
+
+## 浏览器 WASM 架构验收（2026-10-24）
+
+- `test:browser` 在真实 Chrome 中运行单线程 FFmpeg WASM，三模式采用模拟 Bria、真实合成素材：320×180、24fps、24 帧、有音轨的 MP4 可播放；Alpha／Mask 离线换色没有新增提交。
+- 损坏输入明确拒绝；固定 core ffprobe 返回码适配通过成功／失败双向检查。自动直接有色分支、丢失提交响应后刷新恢复、处理期间刷新及第二标签页访问保持原云端 ID，不重复 POST。
+- 任务弹窗预览、Blob 文件下载、1440px／390px 页面无横向溢出；浏览器测试没有发送旧 /api HTTP 请求，没有连接 3001，也没有调用真实 Bria。
+- 3840×2160、0.5 秒、6fps／3 帧合成片完成 WASM 预处理、720p 代理、Mask 校验与原尺寸合成，本机测试约 2 秒。该极短合成片不代表复杂运动视频、60 秒输入或其他电脑性能。
+- 新 Worker 测试使用本地 workerd、真实 D1/R2 API 与模拟上游：Access 签名／有效期、跨站拒绝、用户归属隔离、分片完整性、去重、不明提交、签名地址不泄露通过。
+- 未发布新版，未验证生产 Access、实际 R2 计费／CPU／网络、真实 Bria 文件域名及复杂素材／设备播放。旧 Matroska 原生回归失败仍保留，不以旧版 QA 勾选视为已修复。
+
+## Token 访问链接（2026-10-24）
+
+- Worker 回归 23/23 通过；新增 4 项覆盖原子单次兑换、过期／撤销、跨站与超长请求拒绝、任务归属。真实 Chromium 验证 fragment 清除、HttpOnly Cookie、无 localStorage 凭据以及重复打开链接沿用会话；补充重复打开回归后专项 4/4 再次通过。
+- 远程 D1 0003 与 Token 模式已部署。外层 Cloudflare Access 仍返回 302，生产免登录兑换尚未验收；没有真实 Bria 调用。
+
+## 永久 Token（2026-10-24）
+
+- Worker 回归 24/24 通过，含永久授权复用、独立会话、过期重登、撤销级联；原一次性认证和真实 Chromium 用例继续通过。
+- 生产版本 ae8d003e-1ea9-44b3-b2c5-76f2bfcf7316：外层 Access 已解除，匿名 API 拒绝；同 Token 两次进入成功，health processingReady=true，注销隔离通过。测试会话已清理，没有真实 Bria 请求。

@@ -7,20 +7,26 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "concurrently -k \"npm:dev -w apps/api\" \"npm:dev -w apps/web\"",
+    "dev": "npm run dev -w apps/web",
     "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web && npm run typecheck -w apps/worker",
     "build": "npm run build -w apps/api && npm run build -w apps/web && npm run build -w apps/worker",
-    "test": "npm run build -w apps/worker && node --import tsx --test --test-concurrency=1 tests/*.test.ts apps/worker/tests/*.test.ts",
+    "test": "npm run build -w apps/web && npm run build -w apps/worker && node --import tsx --test --test-concurrency=1 tests/*.test.ts apps/worker/tests/*.test.ts",
     "test:local": "node --import tsx --test tests/*.test.ts",
-    "test:worker": "npm run build -w apps/worker && node --import tsx --test apps/worker/tests/*.test.ts",
-    "dev:worker": "npm run dev -w apps/worker"
+    "test:worker": "npm run build -w apps/web && npm run build -w apps/worker && node --import tsx --test apps/worker/tests/*.test.ts",
+    "dev:worker": "npm run dev -w apps/worker",
+    "prepare:wasm": "node scripts/prepare-wasm.mjs",
+    "test:browser": "npm run prepare:wasm && node --import tsx tests/browser.integration.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "concurrently": "^9.2.1",
-    "typescript": "^5.9.3",
-    "@types/node": "^24.0.0"
+    "playwright": "^1.56.1",
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "undici": "7.30.1"
   }
 }

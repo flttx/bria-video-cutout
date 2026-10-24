@@ -1,3 +1,5 @@
+import { browserApi, importVideo, previewVideo } from './browser/pipeline';
+export { importVideo, previewVideo };
 export interface JobInput {
   id:string; videoId:string; mode:"auto"|"prompt"|"points"; prompt:string;
   points:{x:number;y:number;type:"positive"|"negative";atSeconds:number}[];
@@ -9,6 +11,7 @@ export interface Job {
   sourceMeta?:{width:number;height:number;fps:number};
   latestExport?:ExportResult;
   latestAttempt?:ExportResult;
+  thumbnailUrl?:string;
   filename?:string;videoDuration?:number;
 }
 export interface ExportResult {
@@ -18,8 +21,7 @@ export interface ExportResult {
 }
 export class ApiError extends Error {constructor(message:string,readonly status:number){super(message);}}
 export async function api<T>(path:string,body?:unknown,signal?:AbortSignal):Promise<T> {
-  const response=await fetch(path,{method:body===undefined?"GET":"POST",headers:body===undefined?{}:{"Content-Type":"application/json","X-Cutout-Client":"1"},body:body===undefined?undefined:JSON.stringify(body),signal});
-  return parseResponse<T>(response);
+  try{return await browserApi(path,body,signal) as T;}catch(error){if(error instanceof Error && 'statusCode' in error)throw new ApiError(error.message,Number(error.statusCode));throw error;}
 }
 export async function parseResponse<T>(response:Response):Promise<T> {
   const data:unknown=await response.json().catch(()=>null);

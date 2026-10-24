@@ -1,6 +1,6 @@
 import useProcessing from "./useProcessing";
 import GuidedTour, { type TourStep } from "./GuidedTour";
-import { api, parseResponse } from "./api";
+import { api, importVideo, previewVideo } from "./api";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 
 type Mode = "auto" | "prompt" | "points";
@@ -108,7 +108,7 @@ export default function App() {
       {target:'[data-tour="prompt"]',title:"写清目标特征",body:"例如“穿红色外套的人”或“画面中央的白色汽车”。文字描述模式每段最多处理 5 秒。"},
       {target:'[data-tour="source"]',title:"导入并检查视频",body:"点击或拖入 Bria 支持的视频。系统会读取时长；超过 5 秒时需要先裁选处理片段。"},
       {target:'[data-tour="background"]',title:"选择成品背景",body:"选择纯色背景。尺寸和帧率会跟随原视频，完成后可预览并下载 MP4。"},
-      {target:'[data-tour="start"]',title:"提交并跟踪进度",body:"点击开始后任务会出现在任务记录中。上传显示真实进度，Bria 阶段显示当前状态。"},
+      {target:'[data-tour="start"]',title:"提交并跟踪进度",body:"点击开始后任务会出现在任务记录中。素材在本机浏览器准备，Bria 阶段显示当前状态。"},
       {target:'[data-tour="task-history"]',title:"查看任务记录",body:"任务记录会显示处理阶段和进度。完成后点击任务上的“预览视频”打开弹窗，也可直接下载成品。"},
     ];
     if(guideMode==="points")return [
@@ -124,7 +124,7 @@ export default function App() {
       {target:'[data-tour="source"]',title:"导入并检查视频",body:"点击或拖入 Bria 支持的视频。自动识别每段最多处理 60 秒；更长的视频需要先裁选片段。"},
       {target:'[data-tour="background"]',title:"选择成品背景",body:"选择纯色背景。完成后可以先预览结果，再下载 MP4。"},
       {target:'[data-tour="cache"]',title:"保留透明抠图缓存",body:"开启后可在本机重新合成不同背景，不用再次调用 Bria；缓存会占用本机磁盘。"},
-      {target:'[data-tour="start"]',title:"开始处理",body:"提交后会调用 Bria。上传阶段显示真实百分比，之后按排队、处理、导出等状态更新。"},
+      {target:'[data-tour="start"]',title:"开始处理",body:"提交后会调用 Bria。素材先在浏览器准备，之后按排队、处理、导出等状态更新。"},
       {target:'[data-tour="task-history"]',title:"跟踪任务和下载成品",body:"任务记录会自动展开并显示处理状态。完成后可直接打开预览弹窗或下载成品；刷新页面后记录仍保留。"},
     ];
     return [];
@@ -234,14 +234,13 @@ export default function App() {
       let videoId=existingVideoId;
       if(!videoId) {
         if(!file) throw new Error("无法读取视频文件，请重新选择。");
-        const uploadResponse = await fetch("/api/videos", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Cutout-Client": "1", "X-Video-Filename": encodeURIComponent(file.name) }, body: file });
-        videoId=(await parseResponse<{id:string;meta:Meta}>(uploadResponse)).id;
+        videoId=(await importVideo(file)).id;
       }
-      await api(`/api/videos/${videoId}/preview`, {});
+      const preview=await previewVideo(videoId);
       const video=await api<{meta:Meta}>(`/api/videos/${videoId}`);
       setUploadedVideoId(videoId);
       setMeta(video.meta);
-      setPreviewUrl(`/api/videos/${videoId}/preview`);
+      setPreviewUrl(preview);
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "无法读取此视频，请检查文件格式与编码。");
       setVideoFile(null);
@@ -304,7 +303,7 @@ export default function App() {
     <main className="app-shell">
       <header className="header">
         <div className="brand"><span className="brand-logo">B</span><div><h1>Video Cutout <span>Lab</span></h1><p>Bria AI 视频抠图工作台</p></div></div>
-        <div className="header-tags"><span role="status" className={"status " + apiState}>{apiState === "online" ? "服务已连接" : apiState === "offline" ? "服务未连接" : "正在连接服务"}</span></div>
+        <div className="header-tags"><span role="status" className={"status " + apiState}>{apiState === "online" ? "浏览器处理已就绪" : apiState === "offline" ? "浏览器处理不可用" : "正在检查环境"}</span></div>
       </header>
 
       <div className="workspace">

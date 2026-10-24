@@ -11,3 +11,5 @@ data/
 .dev.vars
 .dev.vars.*
 .wrangler/
+.tools/
+apps/web/public/ffmpeg/

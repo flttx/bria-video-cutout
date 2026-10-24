@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, parseResponse } from "./api";
+import { api, ApiError, importVideo } from "./api";
 import useBackendHealth from "./useBackendHealth";
 import type { ExportResult, Job, JobInput } from "./api";
 
@@ -19,17 +19,7 @@ const PENDING_JOB="bria-cutout.pending-job";
 const isActive=(state:string)=>state!=="completed"&&state!=="failed";
 function readStored(key:string) {try{return localStorage.getItem(key);}catch{return null;}}
 function store(key:string,value:string|null) {try{value===null?localStorage.removeItem(key):localStorage.setItem(key,value);}catch{/* Recovery remains available through the server history. */}}
-function uploadVideo(file:File,onProgress:(percent:number)=>void):Promise<{id:string;meta:{duration:number}}> {
-  return new Promise((resolve,reject)=>{
-    const xhr=new XMLHttpRequest();
-    xhr.open("POST","/api/videos");xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.setRequestHeader("X-Cutout-Client","1");xhr.setRequestHeader("X-Video-Filename",encodeURIComponent(file.name));
-    xhr.upload.onprogress=event=>{if(event.lengthComputable)onProgress(Math.round(event.loaded/event.total*100));};
-    xhr.onerror=()=>reject(new Error("视频上传中断，请检查本地服务和网络后重试。"));
-    xhr.onabort=()=>reject(new Error("视频上传已取消。"));
-    xhr.onload=()=>{void parseResponse<{id:string;meta:{duration:number}}>(new Response(xhr.responseText,{status:xhr.status,statusText:xhr.statusText})).then(resolve,reject);};
-    xhr.send(file);
-  });
-}
+const uploadVideo=importVideo;
 
 export default function useProcessing(props:Props) {
   const [start,setStart]=useState(0),[end,setEnd]=useState(0),[reusable,setReusable]=useState(true);
@@ -37,7 +27,7 @@ export default function useProcessing(props:Props) {
   const [pending,setPending]=useState<JobInput|null>(()=>{try{return JSON.parse(readStored(PENDING_JOB)??"null") as JobInput|null;}catch{return null;}});
   const [working,setWorking]=useState(false),[message,setMessage]=useState("");
   const [history,setHistory]=useState<Job[]>([]);
-  const {apiState,connected,configured}=useBackendHealth();
+  const {apiState,connected,configured,message:cloudMessage}=useBackendHealth();
   const [pollError,setPollError]=useState("");
   const [historyOpen,setHistoryOpen]=useState(false);
   const [hiddenHistoryIds,setHiddenHistoryIds]=useState<Set<string>>(()=>new Set());
@@ -149,7 +139,7 @@ export default function useProcessing(props:Props) {
   async function action(fn:()=>Promise<void>) {
     if(requestLock.current)return;
     requestLock.current=true;setWorking(true);setMessage("");
-    try{await fn();}catch(e){if(mounted.current)setMessage(e instanceof Error?e.message:"请求失败，请检查本地服务。");}
+    try{await fn();}catch(e){if(mounted.current)setMessage(e instanceof Error?e.message:"请求失败，请检查浏览器缓存。");}
     finally{requestLock.current=false;if(mounted.current)setWorking(false);}
   }
   function revealHistory() {
@@ -260,25 +250,27 @@ export default function useProcessing(props:Props) {
       {editingResult ? <>
         {needsExport ? <>
           <button className="primary-button full" disabled={busy||!output||!connected||cannotRecolor} onClick={()=>void exportLocally()}>{busy?"正在本地导出…":output?.state==="failed"?"重试本地导出":"应用修改并导出"}</button>
-          <p>{!connected?"处理服务未连接，请检查本地服务和网络后重试。":cannotRecolor?"此结果没有透明缓存，换色需要重新抠图。":`导出${props.colorLabel(props.color)} · ${targetSpec}，仅在本地处理，不再提交 Bria。`}</p>
+          <p>{!connected?"处理服务未连接，请检查网络或重新登录后重试。":cannotRecolor?"此结果没有透明缓存，换色需要重新抠图。":`导出${props.colorLabel(props.color)} · ${targetSpec}，仅在本地处理，不再提交 Bria。`}</p>
         </> : <p>导出完成，可预览或下载 MP4。</p>}
         <button className="outline-button full new-task-button" disabled={busy} onClick={props.onEditSource}>重新抠图</button>
       </> : <>
         <button className="primary-button full" data-tour="start" disabled={busy||(!props.file&&!props.videoId)||!props.videoReady||!connected||!configured||!!pending} onClick={()=>void startJob()}>{working?"正在提交抠图任务…":busy?"任务处理中…":"开始抠图并导出"}</button>
-        <p>{!connected?"处理服务未连接，请检查本地服务和网络后重试。":!configured?"抠图服务暂不可用，请检查服务端配置和网络。本地文件仍可使用。":!props.file&&!props.videoId?"请先选择视频。":!props.videoReady?"正在准备可预览的视频…":"提交后会调用 Bria 处理所选片段，可能消耗账号额度。"}</p>
+        <p>{!connected?"处理环境不可用，请检查浏览器。":!configured?(cloudMessage||"云端抠图服务暂不可用。本机缓存仍可使用。"):!props.file&&!props.videoId?"请先选择视频。":!props.videoReady?"正在准备可预览的视频…":"提交后会调用 Bria 处理所选片段，可能消耗账号额度。"}</p>
+        {!configured&&connected&&<button className="outline-button" onClick={()=>location.reload()}>重新检查登录</button>}
       </>}
     </div>
+    <p className="helper">视频在本机浏览器处理。处理时请保持页面打开；清除站点数据会删除本机素材和缓存，请及时下载成片。</p>
     {message&&<p className="error-text" role="alert">{message}</p>}
     {pending&&!busy&&<button className="outline-button" onClick={()=>void action(async()=>{try{const existing=await api<Job>(`/api/jobs/${pending.id}`);setJob(existing);setPending(null);store(PENDING_JOB,null);}catch(e){if(e instanceof ApiError&&e.status===404)await submit(pending);else throw e;}})}>恢复未确认的提交</button>}
   </section>;
-  const result = output&&<div className="result-panel"><h3>导出成品 · {props.colorLabel(output.color)} · {outputSpec}</h3>{output.state==="completed"&&changed&&<p className="pending-change" role="status">待应用：{props.colorLabel(props.color)} · {targetSpec}。当前预览和下载仍是{props.colorLabel(output.color)} · {outputSpec}。</p>}{output.state==="completed"&&output.downloadUrl?<><video key={output.id} src={output.downloadUrl} controls preload="metadata" playsInline aria-label="导出成品预览"/><div className="result-info"><p className="helper">{output.meta?.width} × {output.meta?.height} · {output.meta?.duration.toFixed(2)} 秒 · {((output.bytes??0)/1024/1024).toFixed(1)} MB · {output.meta?.hasAudio?"含音轨":"无音轨"}</p><a className={`${changed?"outline-button":"primary-button"} download-link`} href={`${output.downloadUrl}?download=1`} download>{changed?"下载当前成品":"下载 MP4"}</a></div></>:<div className="result-empty" role={output.state==="failed"?"alert":"status"}><p className={output.state==="failed"?"error-text":"helper"}>{output.state==="failed"?"暂未生成成品，请查看任务记录中的失败原因。":"成品生成后可在这里预览，请在任务记录中查看进度。"}</p></div>}</div>;
+  const result = output&&<div className="result-panel"><h3>导出成品 · {props.colorLabel(output.color)} · {outputSpec}</h3>{output.state==="completed"&&changed&&<p className="pending-change" role="status">待应用：{props.colorLabel(props.color)} · {targetSpec}。当前预览和下载仍是{props.colorLabel(output.color)} · {outputSpec}。</p>}{output.state==="completed"&&output.downloadUrl?<><video key={output.id} src={output.downloadUrl} controls preload="metadata" playsInline aria-label="导出成品预览"/><div className="result-info"><p className="helper">{output.meta?.width} × {output.meta?.height} · {output.meta?.duration.toFixed(2)} 秒 · {((output.bytes??0)/1024/1024).toFixed(1)} MB · {output.meta?.hasAudio?"含音轨":"无音轨"}</p><a className={`${changed?"outline-button":"primary-button"} download-link`} href={output.downloadUrl} download="cutout.mp4">{changed?"下载当前成品":"下载 MP4"}</a></div></>:<div className="result-empty" role={output.state==="failed"?"alert":"status"}><p className={output.state==="failed"?"error-text":"helper"}>{output.state==="failed"?"暂未生成成品，请查看任务记录中的失败原因。":"成品生成后可在这里预览，请在任务记录中查看进度。"}</p></div>}</div>;
   const visibleHistory=history.filter(row=>!hiddenHistoryIds.has(row.id));
   const historyView = <><details className="task-history" open={historyOpen} onToggle={event=>setHistoryOpen(event.currentTarget.open)} data-tour="task-history"><summary>任务记录（最近 50 条）</summary>{visibleHistory.length?<p className="helper">直接预览或下载成品；移除记录不会删除本地视频。</p>:<p className="helper">暂无任务。提交后可在这里查看进度，完成后预览和下载。</p>}
     <button className="outline-button" disabled={busy} onClick={()=>void refreshHistory()}>刷新记录</button>
     {pollError&&<p className="error-text" role="status">{pollError}</p>}
     {removedTask&&<div className="history-removal-notice" role="status"><span>已移除“{removedTask.filename}”的记录，本地视频仍保留。</span><button className="outline-button" ref={undoRemoveButton} disabled={working} onClick={()=>void undoRemove()}>撤销移除</button></div>}
     {uploadingTask&&<div className="history-uploading" role="status">
-      <div className="history-entry-summary"><strong title={uploadingTask.fileName}>{uploadingTask.fileName}</strong><span className={uploadingTask.state==="failed"?"history-state failed":"history-state"}>{uploadingTask.state==="uploading"?`上传素材 ${uploadingTask.progress}%`:"上传未完成"}</span></div>
+      <div className="history-entry-summary"><strong title={uploadingTask.fileName}>{uploadingTask.fileName}</strong><span className={uploadingTask.state==="failed"?"history-state failed":"history-state"}>{uploadingTask.state==="uploading"?`读取素材 ${uploadingTask.progress}%`:"素材准备未完成"}</span></div>
       <div className="history-meta"><span>{MODE_LABELS[uploadingTask.mode]}</span><span>原视频 {uploadingTask.duration.toFixed(2)} 秒</span><span>处理 {(uploadingTask.end-uploadingTask.start).toFixed(2)} 秒</span><span>背景 {props.colorLabel(uploadingTask.color)}</span></div>
       {uploadingTask.state==="uploading"?<><TaskSteps state="local-upload"/><div className="task-progress" role="progressbar" aria-label={`视频上传进度 ${uploadingTask.progress}%`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadingTask.progress}><span style={{width:`${uploadingTask.progress}%`}} /></div></>:<><p className="error-text">{uploadingTask.error}</p><button className="outline-button" onClick={()=>setUploadingTask(null)}>关闭</button></>}
     </div>}
@@ -298,7 +290,7 @@ export default function useProcessing(props:Props) {
       <div className="history-entry-main">
         <div className="history-media" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
-          {historyOpen&&completedExport&&<img key={item.latestExport!.id} className="history-thumbnail" src={`/api/jobs/${item.id}/thumbnail?export=${item.latestExport!.id}`} alt="" loading="lazy" onError={event=>{event.currentTarget.style.display="none";}}/>}
+          {historyOpen&&completedExport&&item.thumbnailUrl&&<img key={item.latestExport!.id} className="history-thumbnail" src={item.thumbnailUrl} alt="" loading="lazy" onError={event=>{event.currentTarget.style.display="none";}}/>}
         </div>
         <div className="history-file">
           <strong title={filename}>{filename}</strong>
@@ -308,7 +300,7 @@ export default function useProcessing(props:Props) {
         <div className="history-actions" role="group" aria-label={`${filename}的操作`}>
           {completedExport&&<>
             <button className="outline-button" onClick={()=>{setHistoryVideoError(null);setHistoryPreview({jobId:item.id,created:`${filename} · ${created}`,output:item.latestExport!});}}>预览视频</button>
-            <a className="primary-button" href={`${completedExport}?download=1`} download>下载视频</a>
+            <a className="primary-button" href={completedExport} download>下载视频</a>
           </>}
           {item.state==="failed"&&item.canResume&&<button className="outline-button" disabled={busy} onClick={()=>void resumeTask(item)}>恢复任务</button>}
           {localExport&&state==="failed"&&<button className="outline-button" disabled={busy} onClick={()=>void retryExport(item,attempt)}>重试本地导出</button>}
@@ -324,9 +316,9 @@ export default function useProcessing(props:Props) {
   })}</details>
     {historyPreview&&<dialog className="history-preview-dialog" ref={historyDialog} aria-labelledby="history-preview-title" onClose={event=>{event.currentTarget.querySelector("video")?.pause();setHistoryPreview(null);}}>
       <div className="history-preview-heading"><div><h2 id="history-preview-title">成品预览</h2><p className="helper">{historyPreview.created}</p></div><button className="outline-button" autoFocus onClick={()=>historyDialog.current?.close()}>关闭预览</button></div>
-      <video className="history-video" src={historyPreview.output.downloadUrl} poster={`/api/jobs/${historyPreview.jobId}/thumbnail`} controls preload="metadata" playsInline aria-label="历史任务成品预览" onError={()=>setHistoryVideoError(historyPreview.output.id)}/>
-      {historyVideoError===historyPreview.output.id&&<p className="error-text" role="alert">视频暂时无法预览，请下载后播放，或检查本地服务。</p>}
-      <div className="history-preview-footer"><p className="helper">{props.colorLabel(historyPreview.output.color)}{historyPreview.output.meta&&` · ${historyPreview.output.meta.width} × ${historyPreview.output.meta.height} · ${historyPreview.output.meta.duration.toFixed(2)} 秒`}</p><a className="outline-button" href={`${historyPreview.output.downloadUrl}?download=1`} download>下载成品 MP4</a></div>
+      <video className="history-video" src={historyPreview.output.downloadUrl} controls preload="metadata" playsInline aria-label="历史任务成品预览" onError={()=>setHistoryVideoError(historyPreview.output.id)}/>
+      {historyVideoError===historyPreview.output.id&&<p className="error-text" role="alert">视频暂时无法预览，请下载后播放，或检查浏览器缓存。</p>}
+      <div className="history-preview-footer"><p className="helper">{props.colorLabel(historyPreview.output.color)}{historyPreview.output.meta&&` · ${historyPreview.output.meta.width} × ${historyPreview.output.meta.height} · ${historyPreview.output.meta.duration.toFixed(2)} 秒`}</p><a className="outline-button" href={historyPreview.output.downloadUrl} download>下载成品 MP4</a></div>
     </dialog>}
   </>;
 

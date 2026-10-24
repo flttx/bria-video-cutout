@@ -1,0 +1,10 @@
+This application includes FFmpeg WebAssembly components:
+
+@ffmpeg/ffmpeg 0.12.15 — MIT
+@ffmpeg/core 0.12.10 — GPL-2.0-or-later (as declared by the package)
+Project, source and build instructions: https://github.com/ffmpegwasm/ffmpeg.wasm
+License information: https://ffmpegwasm.netlify.app/docs/faq/#what-is-the-license-of-ffmpegwasm
+
+The distributed core WASM bytes are copied without modification from the pinned npm package.
+scripts/prepare-wasm.mjs splits them into transport chunks and adapts the JavaScript
+ffprobe wrapper to preserve the C function's actual return code.

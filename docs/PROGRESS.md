@@ -249,3 +249,71 @@
 - [ ] 真实 Cloudflare CPU／免费额度、真实账号权限／网络／Bria 联调、复杂抠图质量及目标设备播放验收。没有创建远程资源、部署、提交或推送。
 
 上述实施验证时尚未初始化 Git 仓库；变更前快照保存在 .tmp/cloud-before-v1/，只用于本地差异核对。总体方案记录稳定设计，实际验证结果集中于本进度记录。
+
+## D1 部署绑定修正（2026-10-24）
+
+- [x] 将用户提供的真实数据库 ID 填入代码使用的 `DB` 绑定，保留 `migrations_dir`；删除重复的 `bria_video_cutout` 绑定及其 `remote` 设置。
+- [ ] 远程迁移、部署与云端联调仍需执行；本次仅修改本地配置，不代表远程资源已验证。
+
+## 用户手动部署与本地云端配置（2026-10-24）
+
+- [x] 用户报告远程迁移命令执行完成，并提供 Wrangler 发布成功输出；这是用户操作记录，尚未通过独立云端健康检查验证。
+- [x] 本地服务配置切换为 `cloud`，地址设置为用户提供的 Worker HTTPS origin；保留已有密钥，不在文档或日志记录其值。
+- [ ] 本地 `/api/health` 本次未能连接，需启动或重启本地服务后检查 `processingReady`。包含密钥鉴权的远程检查命令被自动审批拦截，未执行；没有提交真实 Bria 任务。
+
+## 本地 FFmpeg／FFprobe 启动修复（2026-10-24）
+
+- [x] 当前终端 PATH、检查的常见安装目录及项目内未找到 FFmpeg／FFprobe。将 FFmpeg 官网链接的 Gyan 9.0.2 essentials 便携构建安装至项目 `.tools/ffmpeg/`，与发布方 SHA-256 核对通过；两个工具版本命令均成功。`.tools/` 加入忽略列表，没有修改系统 PATH 或项目外文件。
+- [x] 后端支持 `FFMPEG_PATH`、`FFPROBE_PATH`：绝对路径或相对项目根目录路径，未配置时仍使用 PATH；显式配置无效时返回明确错误，不泄露实际路径、不静默回退。服务端环境文件已配置项目内工具路径，模板、README 与 CLOUD 文档同步。
+- [x] API 类型检查通过；新增回归验证 PATH 为空、工作目录变化、带空格参数、无效路径错误与路径脱敏。`npm run test:local` 实跑 18 项，17 通过，真实 FFmpeg 上传解析、Mask／Alpha 合成与导出通过；1 项既有 Matroska Alpha 基线失败仍为容器检查拒绝，没有跳过或放宽断言。
+- [ ] 用户页面需在重启本地服务后重新上传验证；本次未提交真实 Bria 请求，未执行远程部署。
+
+## 浏览器本地 FFmpeg + Cloudflare 网页/API（2026-10-24）
+
+- [x] **用户方向更新：**正常使用不保留本地后端，FFmpeg 可使用本机算力。默认 `npm run dev` 只启动前端，Vite 不再代理 3001；生产静态页面与 `/browser/*` API 由同一 Worker 提供。旧 Node 源码、`data/` 和 `/v1/*` 仅保留历史兼容与回归，不自动迁移或删除。
+- [x] 新增浏览器 IndexedDB、Web Locks 与任务执行器；原视频、源片段、Alpha／Mask、成片、缩略图本机持久化。三模式、同帧点映射、缓存换色、历史预览／下载、移除／撤销、非终态恢复接入现有 UI。处理关闭页面会停止，页面明确提示及时下载和站点数据清理风险。
+- [x] FFmpeg WASM 单线程 core 0.12.10、包装 0.12.15 同源打包，WASM 拆成 8 MiB 静态文件，避免单文件平台上限；Vite 排除 FFmpeg wrapper 的依赖预打包。固定 core 的 ffprobe wrapper 保留实际 C 返回码，损坏输入失败和成功解析双向验证。每次媒体操作后释放 WASM Worker 内存。
+- [x] Worker 新增 Access JWT 验证、同源写入检查、D1 资源归属、8 MiB R2 multipart 分片与整文件流式转交、同源结果流下载。服务端持有 Token／签名 URL，浏览器只得到 ID／状态／字节；不接受客户端任意上游 URL，禁止媒体重定向。
+- [x] 新迁移 0002 添加 browser_jobs/browser_uploads/browser_parts，复用旧提交占位与查询租约。POST 前先持久化本机尝试标记；丢响应／刷新按原云端 ID 查询，明确拒绝后的主动恢复才创建新 ID，不明任务不自动重复付费。
+- [x] 类型检查和完整 build 通过；Worker 仅 dry-run，约 68.87 KiB（gzip 19.58 KiB），静态资源均低于单文件限制。生产前端构建扫描无 Bria／共享服务密钥配置名或 3001 地址。
+- [x] 完整 Node 回归实跑 37 项，36 通过；唯一失败仍为既有原生 Matroska Alpha 用例被输入容器校验拒绝，没有跳过或放宽。Worker 新旧合计 19 项通过，包括实际 D1/R2、本地 JWT 验证、用户隔离、多分片、去重、签名地址不泄露和不可信文件域名拒绝。
+- [x] `test:browser` 真实 Chrome + WASM：三模式 320×180、24fps、24 帧、有音轨成片可播放；离线换色、直接有色分支、损坏输入、丢失提交响应恢复、处理中刷新、多标签页、缩略图、弹窗及下载通过。请求拦截显示没有旧 `/api` HTTP、3001 或真实 Bria 请求。
+- [x] 生产前端构建通过真实页面选片→WASM→模拟云端→播放→下载流程。1440px 和 390px 页面无横向溢出，截图保存在 `.tmp/browser-tests/` 各次运行目录；已查看桌面结果截图。4K 冒烟为 3840×2160、0.5 秒、6fps／3 帧合成片，预处理、720p 代理与原尺寸合成约 2 秒，不能外推长片性能。
+- [x] README、CLOUD、PLAN v2.0、技术细节 v2.0、API_CONTRACT、SOURCES、QA 同步，区分用户需求、工程选择、官方限制和待实测。npm／pnpm 锁文件同步；保留用户既有 workspace 配置。
+- [x] npm 镜像不提供审计接口，改用官方 registry 检查，发现开发工具链 undici 旧版本通告。通过 npm／pnpm overrides 升级为 7.30.1（未降级 Wrangler/Miniflare），官方 registry 更新审计为 0 漏洞；不进入浏览器／Worker 生产包。
+- [ ] 新版未部署，未创建远程桶、应用迁移或配置 Access。正式上线需手动按 CLOUD.md 启用私有 R2 与生命周期、应用 D1 迁移、填 Access 团队域名/AUD，再发布。未提交、推送、升级云端套餐或调用真实 Bria。
+- [ ] 生产 Access、R2、免费 CPU／额度、真实文件域名与 Bria 新上传链路、复杂长片／内存、43 寸设备播放仍待验收；本地模拟结果不代表这些项目通过。
+
+## 浏览器模式远程迁移准备（2026-10-24）
+
+- [x] 根据用户“开始迁移”的指令，使用现有 Wrangler 登录执行远程 D1 `0002_browser.sql`；再次查询确认无待执行迁移，保留原任务与去重记录。
+- [x] 创建本项目专用 `bria-video-cutout-staging` R2 桶；核对 r2.dev 公共访问关闭、无自定义域名。新增 `cleanup-uploads` 生命周期，限定 `uploads/` 前缀，一天后过期对象并终止未完成 multipart；保留默认规则及其他项目桶。
+- [x] 只核对 Secret 名称：已有 `BRIA_API_TOKEN` 与 `CUTOUT_CLOUD_TOKEN`，未读取、输出或修改密钥值。
+- [x] 用户确认尚未配置 Access；补充 CLOUD.md 当前控制台步骤、团队域名及 AUD 获取位置。
+- [ ] 等待用户创建 Access 并提供团队域名和应用 AUD；本地 vars 仍为空，新版 Worker 尚未部署。未发起真实 Bria 请求，生产登录与端到端联调尚未验收。
+
+## 浏览器模式云端发布（2026-10-24）
+
+- [x] 用户创建 Access 并提供应用 AUD；从正式站点未登录跳转独立核对团队域名 `soft-mud-2976.cloudflareaccess.com` 及 AUD，与截图一致。将两项非密钥配置写入 Worker vars。
+- [x] `npm run build` 通过，含 TypeScript、前端资源构建及 Worker dry-run。按用户已发起的云端迁移执行 `wrangler deploy`，11 个新增／更新资源上传成功。
+- [x] 发布版本 `f4921fb4-dc37-4b49-9298-b947ab6b71f1`；地址 https://bria-video-cutout.flttxq.workers.dev 。绑定 DB、STAGING、ASSETS 及 Access vars，沿用既有 Secrets。
+- [x] 发布后匿名访问 `/`、`/browser/health`、`/ffmpeg/manifest.json` 均返回 302，跳转到已核对的 Access 团队及应用。检查没有读取或输出登录 Token。
+- [ ] 当前工具无用户已登录的浏览器会话，尚未验证生产登录后 health、真实 Bria 任务、浏览器视频处理与下载。此次没有发起 Bria 付费请求；既有本地模拟测试不能替代该验收。
+
+## Token 链接免 Cloudflare 登录（2026-10-24）
+
+- [x] 按用户要求新增 AUTH_MODE=token；一次性 fragment 链接兑换 HttpOnly / Secure / SameSite=Strict 会话。入口先清除 fragment，API 保留同源写入和任务归属验证；旧服务密钥不作为网页凭据。
+- [x] 新增 0003_token_sessions.sql；授权和会话只存 SHA-256 摘要，单条条件 UPDATE 兑换，支持会话过期、注销与脚本撤销。链接 24 小时／会话 30 天是工程选择。旧 Access 模式保留，新私人身份不自动合并旧归属。
+- [x] 新增 scripts/create-access-link.mjs；原始 Token 仅写入 Git 忽略的 .tmp/cloud-access-link.txt，未进入命令参数、静态资源、日志或聊天输出；已成功签发生产访问链接。
+- [x] Worker 类型检查通过，前端及 Worker 构建通过；Worker 回归 23/23，包括真实 D1 与 Chromium 认证验证。重复打开已兑换链接沿用会话补充后，认证专项 4/4 通过。未重复执行与本次认证修改无关的长视频回归。
+- [x] 远程应用 0003；发布版本 4061e1a0-39eb-4d53-829f-c6efb18479f0，静态前端无改动。README、CLOUD、API、方案、技术细节、来源与 QA 同步。
+- [ ] 生产 /auth/token 和 /browser/health 仍被 Cloudflare Access 外层跳转（302）；当前工具没有连接的控制台浏览器，需用户禁用仅本项目的 Access 保护后完成生产兑换验证。无真实 Bria 请求。
+
+## 永久访问 Token（2026-10-24）
+
+- [x] 根据用户需求增加 --permanent：Token 无自动过期、可反复建立独立的 30 天会话；退出一个会话不影响其他会话。保留一次性链接兼容和全量撤销功能，撤销父授权级联删除会话。
+- [x] 0004_permanent_tokens.sql 新增 permanent 标记和 browser_token_sessions；只存摘要，不改变原有一次性授权和已登录会话。
+- [x] Worker 类型检查、前端和 Worker 构建通过；24/24 回归通过，新增永久 Token 并发／重复登录、会话过期重登、独立退出与撤销级联验证。
+- [x] 远程 D1 初次请求返回 7403；确认当前登录和 D1 权限仍有效后重试，迁移成功。已部署版本 ae8d003e-1ea9-44b3-b2c5-76f2bfcf7316，永久链接更新到 .tmp/cloud-access-link.txt。原有一次性授权按原规则保留，没有批量撤销其他会话。
+- [x] 生产确认外层 Access 已解除；真实 HTTP 验证匿名 health=401，同一永久 Token 两次换取不同会话均成功、两者 health 的 processingReady=true；注销一个后其返回 401、另一个仍 200。测试创建的会话均已注销，永久 Token 保留有效；凭据未输出到工具或聊天。
+- [ ] 真实 Bria 抠图、素材上传下载和复杂视频性能仍待验收；本次没有调用 Bria。

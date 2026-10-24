@@ -84,3 +84,32 @@
 - **[工程选择]** 服务密钥至少 32 字符，JSON 64KB 上限；云端占位、指纹、70 秒查询锁、90 秒提交不明判定及拒绝码白名单均为本项目规则，不是 Cloudflare 或 Bria 的官方要求。
 - **[官方接口复核]** S1–S5 直达页面在本次适配规划中重新读取；继续显式传入原三模式参数，保留 Mask video_url 兼容分支和 Alpha 警告检查，不依赖有歧义的背景默认值。
 - **[待实测]** 真实 Worker CPU 是否始终满足 Free 配额、账号权限、区域网络、真实 Bria 联调及签名结果有效期。Cloudflare 免费不包含 Bria 费用。
+
+## 2026-10-24 浏览器本地 FFmpeg 迁移依据
+
+| 编号 | 官方直达链接 | 核对内容 |
+| --- | --- | --- |
+| C5 | [Access JWT 验证](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/) | 服务端验证 JWT 签名、issuer、应用 audience 与有效期；不信任未经验证的用户声明 |
+| C6 | [workers.dev](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/) | 可为 workers.dev 应用启用 Access，限制使用者 |
+| C7 | [Worker 静态资源绑定](https://developers.cloudflare.com/workers/static-assets/binding/) | 同一 Worker 绑定前端资源并按路由处理 API |
+| C8 | [R2 Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/) | multipart 创建、分片上传、完成、恢复，以及对象流式读写 |
+| C9 | [R2 对象生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/) | 对象过期删除和未完成 multipart 终止规则 |
+| F1 | [ffmpeg.wasm 概览](https://ffmpegwasm.netlify.app/docs/overview/) | FFmpeg 在浏览器 Web Worker 中运行；单／多线程 core 与虚拟文件系统 |
+| F2 | [ffmpeg.wasm 性能](https://ffmpegwasm.netlify.app/docs/performance/) | 性能低于原生 FFmpeg；官方旧基准不能作为本项目耗时保证 |
+| F3 | [ffmpeg.wasm 使用](https://ffmpegwasm.netlify.app/docs/getting-started/usage/) | Vite 使用 ESM core，加载后执行虚拟文件读写和转码 |
+
+- **[用户需求更新]** 不保留本地 Node 后端；FFmpeg 允许本机运行。因此新网页采用浏览器 WASM，正常使用不依赖 3001 或原生 exe。
+- **[官方重新核对]** S1 通过官方页面 HTML 核对自动最长 60 秒、输入 16000×16000；S2/S3 页面仍列出 5 秒、750p；S4 仍使用上传授权、multipart 和 file_url 三步。本次没有更改 Bria 接口参数与能力声明。
+- **[官方平台限制]** C1 当前仍列出 Free 请求体 100 MB、静态文件单个 25 MiB。**[工程选择]** 8 MiB R2 上传分片及 WASM 静态分片；不能把这些分片大小描述为 Bria 规定。
+- **[工程选择]** 私有 R2 仅暂存待转交 Bria 的文件，成功即删除；部署时配置一天过期及未完成分片终止规则。生命周期执行时机遵循 C9，不承诺精确到秒的清除。
+- **[工程选择]** Access 登录代替浏览器持有共享服务密钥；同源媒体接口隐藏预签名 URL；身份归属哈希、Web Locks、IndexedDB、30 分钟查询窗口均属本项目策略。
+- **[本地实测]** 固定 core 0.12.10 的 JavaScript ffprobe 包装没有保存 C 返回码；构建适配保留实际返回码，真实成功与损坏文件拒绝均回归。不是 Bria 或 Cloudflare API 规定。
+- **[验证边界]** 真实 WASM 短片、三模式合成、离线换色、页面恢复与 4K 三帧冒烟通过；上游均模拟。生产 Access、R2、CPU 配额、真实 Bria 新上传链路、长片内存和设备播放待验收。
+
+## 2026-10-24 Token 访问方式调整
+
+- **[用户需求]** 带 Token 访问，不登录 Cloudflare 账号。
+- **[工程选择]** 32 字节随机单次链接、24 小时兑换期、30 天 HttpOnly 会话，D1 仅存摘要并用条件 UPDATE 原子兑换；同一私人使用者的链接共用归属。这些不是 Bria 或 Cloudflare 官方规定。
+- **[官方核对]** [Workers Access](https://developers.cloudflare.com/workers/configuration/cloudflare-access/) 说明 Access 在 Worker 执行前检查请求，并提供禁用规则／对应应用的方法。Token 模式仍需关闭该项目外层 Access；其他项目不受影响。
+
+- **[用户需求补充]** 支持永久 Token。**[工程选择]** 显式 --permanent 创建可重复使用、无自动过期的授权；每次进入创建独立的 30 天会话，过期后重开原链接，支持管理员撤销。

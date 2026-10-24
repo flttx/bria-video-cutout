@@ -1,18 +1,22 @@
 import { spawn } from "node:child_process";
+import { resolve as resolvePath } from "node:path";
 import { copyFile, open as openFile, rename, rm, stat } from "node:fs/promises";
+import { ROOT } from "./env.js";
 import { AppError } from "./errors.js";
 import { COLORS } from "./config.js";
 import type { ExportOptions, ExportRecord, JobInput, VideoMeta } from "./model.js";
 
 export async function command(executable:string,args:string[],timeout=1_800_000):Promise<string> {
+  const configured=executable==="ffmpeg"?process.env.FFMPEG_PATH:executable==="ffprobe"?process.env.FFPROBE_PATH:undefined;
+  const tool=configured?.trim()?resolvePath(ROOT,configured.trim()):executable;
   return new Promise((resolve,reject)=>{
-    const child=spawn(executable,args,{windowsHide:true,stdio:["ignore","pipe","pipe"]});
+    const child=spawn(tool,args,{windowsHide:true,stdio:["ignore","pipe","pipe"]});
     let output="";
     const timer=setTimeout(()=>{child.kill();reject(new AppError("MEDIA_TIMEOUT","本地视频处理超时，请缩短视频后重试。",500));},timeout);
     child.stdout.on("data",(data:Buffer)=>{if(output.length<8_000_000)output+=data.toString();});
     // FFmpeg diagnostics contain local paths; never send them to app logs or clients.
     child.stderr.resume();
-    child.once("error",()=>{clearTimeout(timer);reject(new AppError("MEDIA_TOOL_MISSING","无法启动 FFmpeg/FFprobe，请确认已安装并加入 PATH。",503));});
+    child.once("error",()=>{clearTimeout(timer);reject(new AppError("MEDIA_TOOL_MISSING","无法启动 FFmpeg/FFprobe，请检查服务端 FFMPEG_PATH、FFPROBE_PATH，或安装工具并加入 PATH 后重启服务。",503));});
     child.once("close",code=>{clearTimeout(timer);code===0?resolve(output):reject(new AppError("MEDIA_FAILED","视频解析或编码失败，请检查文件是否完整、编码是否支持及磁盘空间。",422));});
   });
 }

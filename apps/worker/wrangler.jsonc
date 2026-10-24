@@ -4,11 +4,38 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-30",
   "workers_dev": true,
-  "observability": { "enabled": false },
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "bria-video-cutout",
-    "database_id": "00000000-0000-0000-0000-000000000000",
-    "migrations_dir": "migrations"
-  }]
+  "observability": {
+    "enabled": false
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bria-video-cutout",
+      "database_id": "916443f5-d91e-48b7-9c27-a0508453ef08",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "preview_urls": false,
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/auth/*",
+      "/browser/*",
+      "/v1/*",
+      "/api/*"
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "STAGING",
+      "bucket_name": "bria-video-cutout-staging"
+    }
+  ],
+  "vars": {
+    "AUTH_MODE": "token",
+    "ACCESS_TEAM_DOMAIN": "soft-mud-2976.cloudflareaccess.com",
+    "ACCESS_AUD": "7f257371f25b1a6dd7d26a24f48347bb0432f38546d5c4c9c9e78091faa80115"
+  }
 }

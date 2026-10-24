@@ -5,6 +5,7 @@ import { api } from "./api";
 export default function useBackendHealth() {
   const [state,setState]=useState<"checking"|"online"|"offline">("checking");
   const [configured,setConfigured]=useState(false);
+  const [message,setMessage]=useState('');
   useEffect(()=>{
     let stopped=false,running=false,interval=60_000,lastCheck=0;
     let timer:ReturnType<typeof setTimeout>,controller:AbortController|undefined;
@@ -17,8 +18,8 @@ export default function useBackendHealth() {
       running=true;controller=new AbortController();
       const timeout=setTimeout(()=>controller?.abort(),10_000);
       try {
-        const data=await api<{tokenConfigured:boolean;processingReady?:boolean}>("/api/health",undefined,controller.signal);
-        if(!stopped){setConfigured(data.processingReady??data.tokenConfigured);setState("online");interval=data.processingReady===false?15_000:60_000;}
+        const data=await api<{tokenConfigured:boolean;processingReady?:boolean;message?:string}>("/api/health",undefined,controller.signal);
+        if(!stopped){setMessage(data.message??'');setConfigured(data.processingReady??data.tokenConfigured);setState("online");interval=data.processingReady===false?15_000:60_000;}
       } catch {
         if(!stopped){setState("offline");interval=15_000;}
       } finally {
@@ -32,5 +33,5 @@ export default function useBackendHealth() {
     schedule(0);
     return()=>{stopped=true;clearTimeout(timer);controller?.abort();document.removeEventListener("visibilitychange",wake);window.removeEventListener("online",online);};
   },[]);
-  return {apiState:state,connected:state==="online",configured};
+  return {apiState:state,connected:state==="online",configured,message};
 }

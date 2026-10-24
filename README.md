@@ -1,60 +1,65 @@
-# Bria Video Cutout Demo
+# Bria Video Cutout
 
-本地运行的 Bria 视频抠图 Demo。可选 Cloudflare Workers + D1 管理云端请求，视频处理仍留在本机。AI 仅使用 Bria Video API；FFmpeg 用于视频预处理、Mask 合成与编码。最终把文件拷贝到 43 寸设备播放，设备不运行本项目。
+在线网页 + Cloudflare API + 浏览器本地 FFmpeg 的视频抠图工具。正常使用只需打开部署后的 HTTPS 网址，无需本机 Node.js、3001 服务或 ffmpeg.exe。AI 仅使用 Bria；确定性的视频预处理、合成与编码在本机浏览器执行。
 
-## 功能边界
-- 三种模式：自动前景、Prompt 指定目标、正负点指定实例。
-- 默认白色背景；黑灰红绿蓝黄青洋红橙，共十种预设色。
-- 输出尺寸、画面比例及帧率跟随原视频，MP4 / H.264；无需选择导出规格。
-- 输入格式与编码按 Bria 官方 API 校验；AVI/GIF 与浏览器无法播放的受支持视频会生成本地兼容预览。
-- 不支持自定义背景图片；不支持其他 AI 模型；无设备端交互应用。
+## 当前架构
 
-## 当前进度
-已接通本地上传、Bria 异步抠图/Mask、任务恢复、FFmpeg 合成、源尺寸 MP4 预览与下载。三种模式各完成一次短片真实联调；复杂视频质量与 43 寸设备兼容性仍待专项验收。
+- Cloudflare Worker 托管前端及 `/browser/*` API；访问 Token 链接换取 HttpOnly 会话（支持永久链接），不要求 Cloudflare 账号。Access JWT 为可选模式。
+- D1 保存云端任务、归属、上传引用和去重记录。
+- R2 私有临时桶接收 8 MiB 分片；Worker 流式转交给 Bria，成功后删除临时文件。异常遗留文件通过桶生命周期清理。
+- FFmpeg WebAssembly 在浏览器运行。素材、任务、Alpha／Mask 和成片保存在当前浏览器的 IndexedDB，预览／下载使用本机 Blob URL。
+- 页面关闭后本地计算停止；重新打开同一站点、同一浏览器，可从保存阶段恢复。已尝试提交的任务仅查询原云端 ID，不自动重新付费提交。
 
-## 环境
-Node.js 22.12+、npm、FFmpeg/FFprobe。检测到本机 Node 24.18.0 和 FFmpeg 9。
+生产配置、访问链接生成及发布记录：[docs/CLOUD.md](docs/CLOUD.md)。
 
-## 启动（Windows PowerShell）
-    cd E:\Projects\jupiter\bria-video-cutout
-    npm install
-    # 仅在没有 env 文件时复制模板；已有配置不要覆盖
-    Copy-Item apps\api\config.template apps\api\.env
-    npm run dev
+## 功能与边界
 
-浏览器：http://localhost:5174
-后端：http://localhost:3001/api/health
+自动识别、文字描述、正负点三种模式；白色默认，共十种预设纯色；输出尺寸、比例和帧率跟随源片段，MP4／H.264。保留音轨，支持复用 Alpha／Mask 换色；不支持背景图片上传。43 寸设备只播放下载的成片。
 
-在服务端 env 文件设置 `BRIA_API_TOKEN`。已经存在的根目录 `.env.development` 可直接使用，无需复制。优先级：进程环境变量 → `apps/api/.env` → 根 `.env` → 根 `.env.development`。这些文件均被忽略，Token 不返回前端。默认前端端口为 5174，避免与参考平台占用的 5173 冲突。
+Bria 自动模式最长 60 秒：[官方自动接口](https://docs.bria.ai/video-editing/editing/remove-background)。文字／点选最长 5 秒、Mask 最高 750p：[文字接口](https://docs.bria.ai/video-editing/masking/mask-by-prompt)、[点选接口](https://docs.bria.ai/video-editing/masking/mask-by-key-points)。本项目生成 1280×720 范围内代理，按原片尺寸合成；4K 文件不代表原生 4K Mask。约束与工程选择对照见 [SOURCES.md](docs/SOURCES.md)。
 
-检查：
-    npm run typecheck
-    npm test
-    npm run build
+浏览器 WASM 性能及可用内存不同于原生 FFmpeg；当前通过短片与合成 4K 三帧冒烟，未承诺复杂长片的耗时或内存上限。浏览器缓存不是云端备份；清除站点数据会丢失素材与成片，及时下载所需文件。
 
-## 方案与验收文档
-- docs/PLAN.md
+## 本地开发（只用于开发，不是用户运行要求）
+
+需要 Node.js 22.12+ 与 npm。新前端不再代理 3001。
+
+```powershell
+npm ci
+npm run build
+npm run db:local -w apps/worker
+```
+
+仅在不存在时，将 `apps/worker/config.template` 复制为 `apps/worker/.dev.vars`，填入开发环境变量。`DEV_AUTH=1` 仅对回环地址生效，公网请求仍要求有效会话（或所选 Access 模式的 JWT）；真实 Bria Token 会导致实际请求计费。
+
+```powershell
+# 终端 1：本地模拟 Worker、D1、R2
+npm run dev:worker
+# 终端 2：前端 http://localhost:5174
+npm run dev
+```
+
+根目录 `.env.development` 的 `BRIA_TRANSPORT`、`CUTOUT_CLOUD_URL`、`CUTOUT_CLOUD_TOKEN` 和原生工具路径属于旧 Node API 配置，新网页不读取这些凭据。
+
+## 验证
+
+```powershell
+npm run typecheck
+npm run build
+npm run test:worker
+npm run test:browser
+npm run test:local
+```
+
+`build` 只 dry-run 打包，不部署。浏览器测试使用 Playwright 和本机 Chrome／Edge（也可设置 `BROWSER_TEST_EXECUTABLE`），Bria HTTP 被模拟；FFmpeg WASM 真实运行。测试生成素材及旧回归测试需要原生 FFmpeg／FFprobe，可沿用 `.env.development` 中的工具路径。
+
+旧 `apps/api` 与 `/v1/*` 仅保留用于历史兼容和回归，新网页没有 3001 依赖。旧 Matroska Alpha 测试仍有容器校验基线失败，详见 [PROGRESS.md](docs/PROGRESS.md)。原 `data/` 文件不会自动导入 IndexedDB，也不会被删除。
+
+## 文档
+
+- [部署和运行](docs/CLOUD.md)
+- [总体方案](docs/PLAN.md)
 - [技术细节](docs/技术细节.md)
-- docs/API_CONTRACT.md
-- docs/QA.md
-- docs/PROGRESS.md
-
-Bria 官方文档：https://docs.bria.ai/video-editing
-
-## 云端接口模式
-
-默认保留 direct 直连模式。设置 `BRIA_TRANSPORT=cloud`、`CUTOUT_CLOUD_URL` 和 `CUTOUT_CLOUD_TOKEN` 后，新任务经 Workers 调用 Bria，D1 负责去重与恢复。Worker 的 Bria Token 保存在 Secrets，视频由本地 Node.js 直接上传／下载；浏览器不接触云端凭据。旧任务按其原模式恢复，不自动回退或重发。
-
-完整配置、本地运行、手动部署与验证步骤见 [Workers + D1 运行与部署](docs/CLOUD.md)。本地开发使用 `npm run dev:worker`；`npm run build` 仅执行 Worker 打包 dry-run，不会发布。
-
-## 使用
-
-1. 选择本地视频。设置自动 / Prompt / 点选；点选模式暂停在同一帧添加正负点。
-2. 选择 Bria 支持的 MP4/MOV/WebM/AVI/GIF；输入的视频编码也会按 API 支持范围校验。选择模式后自动核对视频时长：自动最长 60 秒，Prompt/点选最长 5 秒；超限时显示片段裁选控件，且不会静默截断。官方约束见 [SOURCES.md](docs/SOURCES.md)。
-3. 选择十种纯色之一，导出尺寸自动跟随原视频，点击“开始处理并导出”。提交时会再次校验时长、片段范围及模式必填项；通过后才上传并调用 Bria，可能消耗账号额度。
-4. 查看真实任务阶段；完成后在“导出结果”播放或下载 MP4。自动默认缓存透明视频，Mask 默认缓存；修改背景色后显示“待应用”，点击“应用修改并导出”只做本地处理。
-5. 刷新页面可恢复最近任务；通过“本地任务记录”切换历史任务。网络错误可恢复原任务查询，提交结果不明会要求核对控制台，不自动重复付费请求。
-
-任务和结果保存在项目 `data/`，不自动清理。仅在确认不再需要恢复或换色且服务已停止后手动清理。当前只面向本机使用，不作为公网多用户服务部署。
-
-测试分层：`npm test` 使用模拟 Bria 和真实 FFmpeg；真实账号联调记录在 `docs/QA.md`。测试不会自动调用 Bria。最终文件跟随原视频尺寸，不会增加 Mask 分割细节。奇数尺寸补最多 1 像素以兼容编码；可变帧率按源平均帧率归一化。
+- [接口契约](docs/API_CONTRACT.md)
+- [验证记录](docs/QA.md)
+- [进度与限制](docs/PROGRESS.md)

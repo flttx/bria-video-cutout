@@ -18,7 +18,29 @@
 
 **[工程规则]** 导出任务记录 `direct_bria_mp4` / `alpha_composite` / `mask_composite` / `transcode_only`；能否不重调 API 更换颜色取决于是否缓存 Alpha/Mask。以上是本项目状态管理约定，**无 Bria 官方端点对应**。
 
-## 本地 API（已实现，工程契约）
+## 浏览器架构 API（2026-10-24，当前工程契约）
+
+生产入口为同源 /browser/*；默认 AUTH_MODE=token 验证 HttpOnly 会话，Access 模式验证 JWT 签名、issuer、audience、exp。写操作验证 Origin 和 X-Cutout-Client: 1。业务 JSON 请求最大 64 KiB。上传、任务与结果按已验证用户归属检查。客户端不能传任意上游 URL。
+
+Token 模式：GET /auth/token 提供不含凭据的入口页，读取并移除 fragment 中的 token；POST /auth/session 接收 {token}（最大 256 字节），验证永久授权并创建独立会话，或原子兑换一次性授权，设置 Secure / HttpOnly / SameSite=Strict Cookie，响应仅 {ok:true}。GET /auth/session 验证会话；POST /auth/logout 撤销当前会话。永久链接无自动过期、可反复使用；一次性链接 24 小时兑换期、会话 30 天均为工程选择，所有认证响应 no-store；无效／撤销、会话过期或一次性链接重复兑换返回 401。CLI 只向 D1 写入摘要，不写原始 Token。
+
+| 接口 | 请求与返回 |
+| --- | --- |
+| GET /browser/health | ok、userId（不含个人信息的归属标识）、tokenConfigured、processingReady；不返回邮箱、Token 或签名 URL |
+| POST /browser/uploads | JSON {size}；返回 uploadId、chunkSize=8388608；创建私有 R2 multipart 暂存 |
+| PUT /browser/uploads/:id/parts/:number | application/octet-stream；Content-Length 与预期分片长度一致；最后一片可以更小；返回 ok |
+| POST /browser/uploads/:id/complete | 所有分片齐全后锁定转交，R2 complete → Worker 流式 Bria multipart；返回 uploadId，不返回上传表单与地址 |
+| POST /browser/jobs | 沿用 CloudJobInput：cloudJobId、uploadId、mode、meta，以及相应模式参数；同 ID 去重 |
+| GET /browser/jobs/:id | id、state、httpStatus?、warning、resultAvailable；不返回上游请求 ID 或 result URL |
+| GET /browser/jobs/:id/artifact | 对当前用户已完成任务返回同源媒体字节流；不重定向、不返回上游响应错误正文 |
+
+R2 成功转交后删除对象；上传响应丢失或转交失败可重新上传（未提交 AI），但不能据此重复已尝试的抠图 POST。D1 browser_jobs/browser_uploads/browser_parts 新表管理归属和分片；旧 jobs/uploads 仍负责提交去重、查询租约与凭据保存。
+
+本机素材导入、任务列表、恢复、换色、隐藏／撤销和导出状态改为浏览器模块函数，沿用 /api/* 字符串作为内部路由以复用 UI；没有对应网络请求。成片和缩略图用 Blob URL，下载不再追加 ?download=1。IndexedDB 和 Web Locks 负责本机事务及互斥；旧 data/ 不自动迁移。
+
+生产没有有效会话／所选模式的 Access 身份时拒绝浏览器请求；DEV_AUTH=1 只对回环地址开发请求有效。旧 Bearer 服务密钥不能替代浏览器会话。
+
+## 旧 Node API（历史兼容，新网页不调用）
 
 服务只监听 `127.0.0.1:3001`。所有 POST 需要 `X-Cutout-Client: 1`，JSON 请求使用 `Content-Type: application/json`；允许配置的本地页面来源，不向浏览器返回 Token、Bria 请求标识、签名 URL 或磁盘路径。
 
@@ -60,7 +82,7 @@
 
 这些结果只证明本次素材和账号的调用/合成链路；复杂运动、长视频、高分辨率输入、多实例质量与设备播放器兼容性仍待专项验收。
 
-## 云端 API（工程契约，2026-10-23）
+## 旧 /v1 云端 API（历史兼容，2026-10-23）
 
 所有 `/v1` 接口要求 `Authorization: Bearer <CUTOUT_CLOUD_TOKEN>`，密钥至少 32 字符；拒绝带 Origin 的浏览器请求，不提供 CORS。仅供受信任的本地 Node.js 服务端调用，不是浏览器公开接口。POST 仅接收 JSON，最大 64KB。所有响应设置 no-store；不返回原始异常、上游错误正文或 Bria 请求 ID。
 
