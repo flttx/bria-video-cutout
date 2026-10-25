@@ -7,6 +7,7 @@ import { body, submit, status } from './legacy.js';
 import type { Env } from './legacy.js';
 import { browserIdentity } from './access.js';
 import type { AccessEnv } from './access.js';
+import { diagnostics } from './diagnostics.js';
 export interface BrowserEnv extends Env,AccessEnv { STAGING:R2Bucket; ASSETS:Fetcher; BRIA_MEDIA_HOSTS?:string }
 const CHUNK=8*1024*1024;
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
@@ -29,6 +30,46 @@ async function ownedJob(id:string,owner:string,device:string,env:BrowserEnv) {
 async function publicJob(response:Response) {
   const data=await response.json() as {id:string;state:string;httpStatus?:number;status?:BriaStatusResponse};
   return json({id:data.id,state:data.state,httpStatus:data.httpStatus,warning:!!data.status?.result?.warning,resultAvailable:!!(data.status?.result?.mask_url||data.status?.result?.video_url)},response.status);
+}
+// Engineering decision: results are copied to R2 under results/<job id> so repeat and resumed downloads are served
+// from Cloudflare instead of re-fetching the upstream media URL. Only the response headers are time-limited; a slow
+// body transfer is never cut off mid-stream, and clients resume with "Range: bytes=N-".
+const RESULT_HEADERS_TIMEOUT=30_000;
+function artifactHeaders(extra:Record<string,string>) {
+  return new Headers({'Content-Type':'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Accept-Ranges':'bytes',...extra});
+}
+function rangeStart(request:Request) {
+  const header=request.headers.get('range');if(header===null)return null;
+  const match=/^bytes=(\d+)-$/.exec(header.trim());if(!match)throw new AppError('RANGE_INVALID','仅支持从指定字节继续下载。',416);
+  return Number(match[1]);
+}
+async function artifact(request:Request,id:string,url:string,env:BrowserEnv,ctx?:ExecutionContext) {
+  const start=rangeStart(request),key='results/'+id,cached=await env.STAGING.head(key);
+  if(cached) {
+    if(start!==null&&start>=cached.size)return new Response(null,{status:416,headers:artifactHeaders({'Content-Range':`bytes */${cached.size}`})});
+    const object=await env.STAGING.get(key,start?{range:{offset:start}}:undefined);
+    if(!object)throw new AppError('RESULT_MISSING','处理结果缺少媒体文件。',502);
+    const from=start??0,length=cached.size-from;
+    return new Response(object.body,{status:start?206:200,headers:artifactHeaders({'X-Cutout-Source':'r2','Content-Length':String(length),...(start?{'Content-Range':`bytes ${from}-${cached.size-1}/${cached.size}`}:{})})});
+  }
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),RESULT_HEADERS_TIMEOUT);
+  let response:Response;
+  try{response=await fetch(upstreamUrl(url,env),{redirect:'manual',signal:controller.signal,headers:start?{Range:`bytes=${start}-`}:{}});}
+  catch(error){if(error instanceof AppError)throw error;throw new AppError('RESULT_TIMEOUT','结果服务器暂时没有响应，请稍后重试；不会重新抠图。',504);}
+  finally{clearTimeout(timer);}
+  if(response.status===416){await response.body?.cancel();return new Response(null,{status:416,headers:artifactHeaders({})});}
+  if(!response.ok||!response.body){await response.body?.cancel();throw new AppError('RESULT_EXPIRED','结果不可下载或已过期，不会自动重新抠图。',410);}
+  const extra:Record<string,string>={'X-Cutout-Source':'upstream'},length=response.headers.get('content-length');if(length)extra['Content-Length']=length;
+  const partial=response.status===206,contentRange=response.headers.get('content-range');
+  if(partial&&contentRange)extra['Content-Range']=contentRange;
+  let body:ReadableStream=response.body;
+  // A complete upstream body is also copied to R2 in the background; a failed copy only means the next request
+  // fetches upstream again.
+  if(!partial&&length&&ctx) {
+    const [client,copy]=response.body.tee(),fixed=new FixedLengthStream(Number(length));body=client;
+    ctx.waitUntil(Promise.all([copy.pipeTo(fixed.writable),env.STAGING.put(key,fixed.readable,{httpMetadata:{contentType:'video/mp4'}})]).catch(()=>{}));
+  }
+  return new Response(body,{status:partial?206:200,headers:artifactHeaders(extra)});
 }
 async function forwardUpload(row:Upload,env:BrowserEnv,bria:BriaHttpClient) {
   const stored=await env.STAGING.get('uploads/'+row.id);
@@ -53,7 +94,7 @@ async function forwardUpload(row:Upload,env:BrowserEnv,bria:BriaHttpClient) {
   await env.DB.batch([env.DB.prepare('INSERT INTO uploads(id,file_url,created_at,expires_at) VALUES(?,?,?,?)').bind(row.id,grant.file_url,now,now+86400000),env.DB.prepare("UPDATE browser_uploads SET state='complete' WHERE id=?").bind(row.id)]);
   await env.STAGING.delete('uploads/'+row.id);
 }
-export async function browserFetch(request:Request,env:BrowserEnv):Promise<Response> {
+export async function browserFetch(request:Request,env:BrowserEnv,ctx?:ExecutionContext):Promise<Response> {
   try {
     const owner=await browserIdentity(request,env),path=new URL(request.url).pathname;
     const header=request.headers.get('x-cutout-device');
@@ -62,6 +103,10 @@ export async function browserFetch(request:Request,env:BrowserEnv):Promise<Respo
     if(path==='/browser/health'&&request.method==='GET') {
       await env.DB.prepare('SELECT id,device_id FROM browser_jobs LIMIT 1').first();await env.DB.prepare('SELECT id FROM jobs LIMIT 1').first();
       return json({ok:true,userId:owner,deviceIsolation:true,deviceId:device,tokenConfigured:!!env.BRIA_API_TOKEN,processingReady:!!env.BRIA_API_TOKEN&&!!env.STAGING});
+    }
+    if(path==='/browser/diagnostics'||path.startsWith('/browser/diagnostics/')){
+      if(!env.STAGING)throw new AppError('CLOUD_CONFIG','日志存储暂不可用。',503);
+      return await diagnostics(request,owner,device,env.STAGING);
     }
     if(!env.BRIA_API_TOKEN||!env.STAGING)throw new AppError('CLOUD_CONFIG','请配置 Bria Secret 和临时上传存储。',503);
     const bria=new BriaHttpClient(env.BRIA_API_TOKEN);
@@ -117,11 +162,7 @@ export async function browserFetch(request:Request,env:BrowserEnv):Promise<Respo
       const result=(JSON.parse(row.status_json) as BriaStatusResponse).result,params=JSON.parse(row.params_json) as {mode:string};
       const url=params.mode==='auto'?result?.video_url:result?.mask_url??result?.video_url;
       if(!url)throw new AppError('RESULT_MISSING','处理结果缺少媒体文件。',502);
-      const response=await fetch(upstreamUrl(url,env),{redirect:'manual',signal:AbortSignal.timeout(180000)});
-      if(!response.ok){await response.body?.cancel();throw new AppError('RESULT_EXPIRED','结果不可下载或已过期，不会自动重新抠图。',410);}
-      const headers=new Headers({'Content-Type':'application/octet-stream','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
-      const length=response.headers.get('content-length');if(length)headers.set('Content-Length',length);
-      return new Response(response.body,{headers});
+      return await artifact(request,id,url,env,ctx);
     }
     throw new AppError('NOT_FOUND','接口不存在。',404);
   }catch(error){return error instanceof AppError?json({code:error.code,message:error.message},error.statusCode):json({code:'CLOUD_STORAGE',message:'云端服务暂不可用，请稍后查询原任务。'},503);}

@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 let mf:Miniflare,db:Awaited<ReturnType<Miniflare['getD1Database']>>,alice:string,bob:string,expired:string;
-let submitted=0,forwarded=0,submitCode=202;
+let submitted=0,forwarded=0,submitCode=202,mediaRequests=0;
 before(async()=>{
   const keys=await generateKeyPair('RS256'),jwk={...await exportJWK(keys.publicKey),kid:'test-key',alg:'RS256',use:'sig'};
   const sign=(sub:string,expiration='1h')=>new SignJWT({sub}).setProtectedHeader({alg:'RS256',kid:'test-key'}).setIssuer('https://test-team.cloudflareaccess.com').setAudience('test-app').setIssuedAt().setExpirationTime(expiration).sign(keys.privateKey);
@@ -15,6 +15,8 @@ before(async()=>{
     if(url.origin==='https://test-team.cloudflareaccess.com')return Response.json({keys:[jwk]});
     if(url.origin==='https://media.example.com') {
       if(request.method==='POST'){const text=await request.text();assert.match(text,/name="policy"/);assert.match(text,/name="file"/);forwarded++;return new Response(null,{status:204});}
+      const range=/^bytes=(\d+)-$/.exec(request.headers.get('range')??'');mediaRequests++;
+      if(range){const start=Number(range[1]);if(start>=12)return new Response(null,{status:416});return new Response('result-video'.slice(start),{status:206,headers:{'Content-Length':String(12-start),'Content-Range':`bytes ${start}-11/12`}});}
       return new Response('result-video',{headers:{'Content-Length':'12'}});
     }
     assert.equal(url.origin,'https://engine.prod.bria-api.com','All upstream traffic must be mocked');
@@ -124,4 +126,48 @@ test('legacy task adoption is owner-checked, atomic, idempotent and never resubm
   assert.equal((await call(path,{},alice,'POST',winner)).status,200);
   assert.equal((await call('/browser/jobs/'+id)).status,404);
   assert.equal(submitted,start,'migration cannot submit a paid request');
+});
+
+test('artifacts resume with Range from upstream, are copied to R2, then resume from R2 without upstream',async()=>{
+  const uploadId=await upload(),id=randomUUID();
+  assert.equal((await call('/browser/jobs',{cloudJobId:id,uploadId,mode:'auto',meta:{width:320,height:180,duration:1,fps:24,frames:24}})).status,202);
+  await db.prepare('UPDATE jobs SET next_poll_at=0 WHERE id=?').bind(id).run();
+  assert.match(await (await call('/browser/jobs/'+id)).text(),/completed/);
+  const path='/browser/jobs/'+id+'/artifact';
+  const partial=await call(path,undefined,alice,'GET',{Range:'bytes=7-'});
+  assert.equal(partial.status,206);assert.equal(partial.headers.get('x-cutout-source'),'upstream');assert.equal(partial.headers.get('content-range'),'bytes 7-11/12');assert.equal(await partial.text(),'video');
+  assert.equal((await call(path,undefined,alice,'GET',{Range:'items=0-'})).status,416);
+  const full=await call(path);assert.equal(full.status,200);assert.equal(full.headers.get('accept-ranges'),'bytes');assert.equal(await full.text(),'result-video');
+  const bucket=await mf.getR2Bucket('STAGING');
+  for(let i=0;i<50&&!await bucket.head('results/'+id);i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(await bucket.head('results/'+id),'complete result copied to R2');
+  const before=mediaRequests;
+  const resumed=await call(path,undefined,alice,'GET',{Range:'bytes=7-'});
+  assert.equal(resumed.status,206);assert.equal(resumed.headers.get('x-cutout-source'),'r2');assert.equal(resumed.headers.get('content-range'),'bytes 7-11/12');assert.equal(await resumed.text(),'video');
+  assert.equal(await (await call(path)).text(),'result-video');
+  const beyond=await call(path,undefined,alice,'GET',{Range:'bytes=12-'});assert.equal(beyond.status,416);assert.equal(beyond.headers.get('content-range'),'bytes */12');
+  assert.equal(mediaRequests,before,'cached result never refetches upstream');
+  assert.equal((await call(path,undefined,bob,'GET',{Range:'bytes=7-'})).status,404,'cache does not bypass ownership');
+});
+
+test('manual diagnostics are private, device scoped, schema limited and never submit Bria',async()=>{
+  const a={'X-Cutout-Device':'dev_'+'a'.repeat(64)},b={'X-Cutout-Device':'dev_'+'b'.repeat(64)};
+  const row={time:Date.now(),run:'1234abcd',task:'123456abcdef',event:'sample',lane:0,values:[65536,65536,1200,3]};
+  const encode=(r:unknown)=>new TextEncoder().encode(JSON.stringify({schema:1,type:'adplayer-task-diagnostics'})+'\n'+JSON.stringify(r)+'\n');
+  const bytes=encode(row),start=submitted;
+  const uploadLog=(data:Uint8Array,token=alice,scope=a)=>call('/browser/diagnostics',data,token,'POST',{...scope,'Content-Type':'application/x-ndjson','Content-Length':String(data.length)});
+  const response=await uploadLog(bytes);assert.equal(response.status,201,await response.clone().text());
+  const receipt=await response.json() as {id:string;bytes:number};assert.match(receipt.id,/^[a-f0-9-]{36}$/);assert.equal(receipt.bytes,bytes.length);
+  const path='/browser/diagnostics/'+receipt.id;
+  assert.equal(await (await call(path,undefined,alice,'GET',a)).text(),new TextDecoder().decode(bytes));
+  assert.equal((await call(path,undefined,alice,'GET',b)).status,404);
+  assert.equal((await call(path,undefined,bob,'GET',a)).status,404);
+  assert.equal((await call(path)).status,400);
+  assert.equal((await uploadLog(bytes,'')).status,401);
+  assert.equal((await uploadLog(encode({...row,cookie:'secret'}))).status,400);
+  assert.equal((await uploadLog(encode({...row,values:['https://private.invalid/signed']}))).status,400);
+  assert.equal((await uploadLog(encode({...row,event:'https://private.invalid'}))).status,400);
+  assert.equal((await call('/browser/diagnostics',bytes,alice,'POST',{...a,Origin:'https://evil.example','Content-Type':'application/x-ndjson','Content-Length':String(bytes.length)})).status,403);
+  assert.equal((await uploadLog(new Uint8Array(1024*1024+1))).status,413);
+  assert.equal(submitted,start,'diagnostic upload never calls Bria');
 });

@@ -32,7 +32,7 @@ Token 模式：GET /auth/token 提供不含凭据的入口页，读取并移除 
 | POST /browser/uploads/:id/complete | 所有分片齐全后锁定转交，R2 complete → Worker 流式 Bria multipart；返回 uploadId，不返回上传表单与地址 |
 | POST /browser/jobs | 沿用 CloudJobInput：cloudJobId、uploadId、mode、meta，以及相应模式参数；同 ID 去重 |
 | GET /browser/jobs/:id | id、state、httpStatus?、warning、resultAvailable；不返回上游请求 ID 或 result URL |
-| GET /browser/jobs/:id/artifact | 对当前用户已完成任务返回同源媒体字节流；不重定向、不返回上游响应错误正文 |
+| GET /browser/jobs/:id/artifact | 对当前用户已完成任务返回同源媒体字节流；不重定向、不返回上游响应错误正文。支持 `Range: bytes=N-` 续传（206 + `Content-Range`，越界 416，其他 Range 形式 416）；首次完整下载后副本保存在 R2 `results/<id>`，之后直接从 R2 返回 |
 
 R2 成功转交后删除对象；上传响应丢失或转交失败可重新上传（未提交 AI），但不能据此重复已尝试的抠图 POST。D1 browser_jobs/browser_uploads/browser_parts 新表管理归属和分片；旧 jobs/uploads 仍负责提交去重、查询租约与凭据保存。
 
@@ -104,3 +104,12 @@ D1 先插入唯一占位再提交；同 ID 比较规范化参数的 SHA-256。�
 本地任务新增 transport（direct/cloud）和 cloudJobId，均不出现在浏览器任务视图中。缺少 transport 的旧记录按 direct 处理；模式配置改变不迁移历史任务。云端 Token 只在 Worker，本地保存内部服务密钥。已有 direct 任务如需恢复，须保留对应本地 Bria 凭据。
 
 官方来源：[上传](https://docs.bria.ai/local-video-upload-service)、[自动](https://docs.bria.ai/video-editing/editing/remove-background)、[Prompt](https://docs.bria.ai/video-editing/masking/mask-by-prompt)、[点选](https://docs.bria.ai/video-editing/masking/mask-by-key-points)、[异步状态](https://docs.bria.ai/getting-started/async-requests)。上述 /v1 接口、去重及锁时长均为工程约定，不是 Bria 提供的 API。
+
+
+### 临时任务诊断日志
+
+`POST /browser/diagnostics`：与 browser API 相同的会话、Origin、X-Cutout-Client 和有效 X-Cutout-Device；Content-Type 为 application/x-ndjson，Content-Length 为实际 UTF-8 字节数且不超过 1 MiB。只接受 schema=1 的匿名数字事件日志；成功 201 返回 `{id,bytes,createdAt}`。日志不经过 Bria。
+
+`GET /browser/diagnostics/:id`：仅同账号同设备可读取；其他账号／设备返回 404。R2 私有对象名为 diagnostics/<id>.jsonl，授权元数据不返回给客户端；没有公开下载 URL。设备点击上传是唯一触发，不做后台自动上传或自动重试。
+
+`GET /browser/jobs/:id/artifact` 增加 `X-Cutout-Source`，值为 `r2` 或 `upstream`；缺失该头时客户端记录来源未知，不用 CF-Cache-Status 推断 R2 命中。
