@@ -24,7 +24,7 @@ before(async()=>{
     return Response.json({request_id:'request-test-1234'},{status:202});
   }}));
   db=await mf.getD1Database('DB');
-  for(const file of ['0001_tasks.sql','0002_browser.sql'])for(const statement of (await readFile('apps/worker/migrations/'+file,'utf8')).split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  for(const file of ['0001_tasks.sql','0002_browser.sql','0005_device_scope.sql'])for(const statement of (await readFile('apps/worker/migrations/'+file,'utf8')).split(';').filter(s=>s.trim()))await db.prepare(statement).run();
 });
 after(async()=>{await mf?.dispose();});
 function call(path:string,body?:unknown,token=alice,method=body===undefined?'GET':'POST',extra:Record<string,string>={}) {
@@ -84,4 +84,44 @@ test('multiple R2 parts enforce lengths and result proxy rejects an untrusted me
   await call('/browser/jobs',{cloudJobId:id,uploadId,mode:'auto',meta:{width:320,height:180,duration:1,fps:24,frames:24}});
   await db.prepare("UPDATE jobs SET state='completed',status_json=? WHERE id=?").bind(JSON.stringify({status:'COMPLETED',result:{video_url:'https://untrusted.invalid/private'}}),id).run();
   const denied=await call('/browser/jobs/'+id+'/artifact');assert.equal(denied.status,502);assert.doesNotMatch(await denied.text(),/untrusted|private/);
+});
+
+
+test('same-account devices isolate uploads, jobs and artifacts; missing header cannot bypass scope',async()=>{
+  const a={'X-Cutout-Device':'dev_'+'a'.repeat(64)},b={'X-Cutout-Device':'dev_'+'b'.repeat(64)};
+  const deviceCall=(path:string,body?:unknown,headers:Record<string,string>=a,method=body===undefined?'GET':'POST')=>call(path,body,alice,method,headers);
+  assert.equal((await deviceCall('/browser/health',undefined,{'X-Cutout-Device':'invalid'})).status,400);
+  const health=await (await deviceCall('/browser/health')).json() as {deviceIsolation:boolean;deviceId:string};
+  assert.equal(health.deviceIsolation,true);assert.equal(health.deviceId,a['X-Cutout-Device']);
+  const {uploadId}=await (await deviceCall('/browser/uploads',{size:16})).json() as {uploadId:string};
+  for(const headers of [b,{}]) {
+    assert.equal((await deviceCall(`/browser/uploads/${uploadId}/parts/1`,new Uint8Array(16),{...headers,'Content-Length':'16'},'PUT')).status,404);
+    assert.equal((await deviceCall(`/browser/uploads/${uploadId}/complete`,{},headers)).status,404);
+  }
+  assert.equal((await deviceCall(`/browser/uploads/${uploadId}/parts/1`,new Uint8Array(16),{...a,'Content-Length':'16'},'PUT')).status,200);
+  assert.equal((await deviceCall(`/browser/uploads/${uploadId}/complete`,{})).status,200);
+  const input={cloudJobId:randomUUID(),uploadId,mode:'auto',meta:{width:320,height:180,duration:1,fps:24,frames:24}},start=submitted;
+  assert.equal((await deviceCall('/browser/jobs',input,b)).status,404);
+  assert.equal((await deviceCall('/browser/jobs',input)).status,202);
+  for(const headers of [b,{}])for(const suffix of ['','/artifact'])assert.equal((await deviceCall('/browser/jobs/'+input.cloudJobId+suffix,undefined,headers)).status,404);
+  assert.equal((await deviceCall('/browser/jobs/'+input.cloudJobId+'/claim-device',{},b)).status,404);
+  assert.equal(submitted,start+1);
+  await db.prepare('UPDATE jobs SET next_poll_at=0 WHERE id=?').bind(input.cloudJobId).run();
+  assert.equal((await deviceCall('/browser/jobs/'+input.cloudJobId)).status,200);
+  assert.equal(await (await deviceCall('/browser/jobs/'+input.cloudJobId+'/artifact')).text(),'result-video');
+});
+
+test('legacy task adoption is owner-checked, atomic, idempotent and never resubmits',async()=>{
+  const id=randomUUID(),owner=(await (await call('/browser/health')).json() as {userId:string}).userId;
+  await db.prepare("INSERT INTO browser_jobs(id,owner) VALUES(?,?)").bind(id,owner).run();
+  const a={'X-Cutout-Device':'dev_'+'c'.repeat(64)},b={'X-Cutout-Device':'dev_'+'d'.repeat(64)},start=submitted;
+  const path='/browser/jobs/'+id+'/claim-device';
+  assert.equal((await call(path,{},bob,'POST',a)).status,404);
+  assert.equal((await call(path,{})).status,400);
+  const responses=await Promise.all([call(path,{},alice,'POST',a),call(path,{},alice,'POST',b)]);
+  assert.deepEqual(responses.map(r=>r.status).sort(),[200,404]);
+  const winner=responses[0].status===200?a:b;
+  assert.equal((await call(path,{},alice,'POST',winner)).status,200);
+  assert.equal((await call('/browser/jobs/'+id)).status,404);
+  assert.equal(submitted,start,'migration cannot submit a paid request');
 });

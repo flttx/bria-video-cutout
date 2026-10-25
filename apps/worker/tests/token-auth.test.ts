@@ -10,7 +10,7 @@ const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
 before(async()=>{
   mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'apps/worker/dist/index.js',compatibilityDate:'2026-07-30',d1Databases:['DB'],r2Buckets:['STAGING'],bindings:{AUTH_MODE:'token',BRIA_API_TOKEN:'fake'},outboundService:()=>{throw new Error('No upstream call expected');}}));
   db=await mf.getD1Database('DB');
-  for(const file of ['0001_tasks.sql','0002_browser.sql','0003_token_sessions.sql','0004_permanent_tokens.sql'])for(const sql of (await readFile('apps/worker/migrations/'+file,'utf8')).split(';').filter(s=>s.trim()))await db.prepare(sql).run();
+  for(const file of ['0001_tasks.sql','0002_browser.sql','0003_token_sessions.sql','0004_permanent_tokens.sql','0005_device_scope.sql'])for(const sql of (await readFile('apps/worker/migrations/'+file,'utf8')).split(';').filter(s=>s.trim()))await db.prepare(sql).run();
 });
 after(async()=>{await mf?.dispose();});
 async function grant(owner='alice',expires=Date.now()+60000){

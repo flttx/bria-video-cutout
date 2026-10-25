@@ -10,21 +10,21 @@ import type { AccessEnv } from './access.js';
 export interface BrowserEnv extends Env,AccessEnv { STAGING:R2Bucket; ASSETS:Fetcher; BRIA_MEDIA_HOSTS?:string }
 const CHUNK=8*1024*1024;
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-interface Upload { id:string; owner:string; size:number; multipart_id:string; state:string; expires_at:number }
+interface Upload { id:string; owner:string; device_id:string; size:number; multipart_id:string; state:string; expires_at:number }
 function upstreamUrl(value:string,env:BrowserEnv) {
   const url=mediaUrl(value);
   const roots=['amazonaws.com','cloudfront.net','bria.ai','bria-api.com',...(env.BRIA_MEDIA_HOSTS??'').split(',').map(s=>s.trim()).filter(Boolean)];
   if(!roots.some(host=>url.hostname===host||url.hostname.endsWith('.'+host)))throw new AppError('MEDIA_HOST','上游媒体域名尚未获准，请联系管理员核对配置。',502);
   return url.href;
 }
-async function ownedUpload(id:string,owner:string,env:BrowserEnv) {
-  const row=await env.DB.prepare('SELECT * FROM browser_uploads WHERE id=? AND owner=?').bind(id,owner).first<Upload>();
+async function ownedUpload(id:string,owner:string,device:string,env:BrowserEnv) {
+  const row=await env.DB.prepare('SELECT * FROM browser_uploads WHERE id=? AND owner=? AND device_id=?').bind(id,owner,device).first<Upload>();
   if(!row)throw new AppError('NOT_FOUND','上传记录不存在。',404);
   if(row.expires_at<=Date.now())throw new AppError('UPLOAD_EXPIRED','上传已过期，请重新上传。',410);
   return row;
 }
-async function ownedJob(id:string,owner:string,env:BrowserEnv) {
-  if(!await env.DB.prepare('SELECT id FROM browser_jobs WHERE id=? AND owner=?').bind(id,owner).first())throw new AppError('NOT_FOUND','任务不存在。',404);
+async function ownedJob(id:string,owner:string,device:string,env:BrowserEnv) {
+  if(!await env.DB.prepare('SELECT id FROM browser_jobs WHERE id=? AND owner=? AND device_id=?').bind(id,owner,device).first())throw new AppError('NOT_FOUND','任务不存在。',404);
 }
 async function publicJob(response:Response) {
   const data=await response.json() as {id:string;state:string;httpStatus?:number;status?:BriaStatusResponse};
@@ -56,9 +56,12 @@ async function forwardUpload(row:Upload,env:BrowserEnv,bria:BriaHttpClient) {
 export async function browserFetch(request:Request,env:BrowserEnv):Promise<Response> {
   try {
     const owner=await browserIdentity(request,env),path=new URL(request.url).pathname;
+    const header=request.headers.get('x-cutout-device');
+    if(header!==null&&!/^dev_[a-f0-9]{64}$/.test(header))throw new AppError('DEVICE_INVALID','设备标识无效。',400);
+    const device=header??''; // Unupgraded web clients retain a separate legacy namespace.
     if(path==='/browser/health'&&request.method==='GET') {
-      await env.DB.prepare('SELECT id FROM browser_jobs LIMIT 1').first();await env.DB.prepare('SELECT id FROM jobs LIMIT 1').first();
-      return json({ok:true,userId:owner,tokenConfigured:!!env.BRIA_API_TOKEN,processingReady:!!env.BRIA_API_TOKEN&&!!env.STAGING});
+      await env.DB.prepare('SELECT id,device_id FROM browser_jobs LIMIT 1').first();await env.DB.prepare('SELECT id FROM jobs LIMIT 1').first();
+      return json({ok:true,userId:owner,deviceIsolation:true,deviceId:device,tokenConfigured:!!env.BRIA_API_TOKEN,processingReady:!!env.BRIA_API_TOKEN&&!!env.STAGING});
     }
     if(!env.BRIA_API_TOKEN||!env.STAGING)throw new AppError('CLOUD_CONFIG','请配置 Bria Secret 和临时上传存储。',503);
     const bria=new BriaHttpClient(env.BRIA_API_TOKEN);
@@ -66,12 +69,12 @@ export async function browserFetch(request:Request,env:BrowserEnv):Promise<Respo
       const input=object(await body(request));
       if(!Number.isInteger(input.size)||Number(input.size)<1||Number(input.size)>MAX_BYTES)throw new AppError('UPLOAD_SIZE','视频须大于 0 字节且不超过 1 GB。',413);
       const id=crypto.randomUUID(),now=Date.now(),upload=await env.STAGING.createMultipartUpload('uploads/'+id,{httpMetadata:{contentType:'video/mp4'}});
-      try{await env.DB.prepare('INSERT INTO browser_uploads(id,owner,size,multipart_id,created_at,expires_at) VALUES(?,?,?,?,?,?)').bind(id,owner,input.size,upload.uploadId,now,now+86400000).run();}catch(error){await upload.abort();throw error;}
+      try{await env.DB.prepare('INSERT INTO browser_uploads(id,owner,size,multipart_id,created_at,expires_at,device_id) VALUES(?,?,?,?,?,?,?)').bind(id,owner,input.size,upload.uploadId,now,now+86400000,device).run();}catch(error){await upload.abort();throw error;}
       return json({uploadId:id,chunkSize:CHUNK},201);
     }
     const part=path.match(/^\/browser\/uploads\/([^/]+)\/parts\/(\d+)$/);
     if(part&&request.method==='PUT') {
-      const row=await ownedUpload(validId(part[1]),owner,env),number=Number(part[2]);
+      const row=await ownedUpload(validId(part[1]),owner,device,env),number=Number(part[2]);
       if(row.state!=='uploading')throw new AppError('UPLOAD_LOCKED','上传已结束，请重新创建上传。',409);
       const expected=Math.min(CHUNK,row.size-(number-1)*CHUNK);
       if(number<1||number>Math.ceil(row.size/CHUNK)||Number(request.headers.get('content-length'))!==expected||!request.body)throw new AppError('UPLOAD_PART','分片大小或编号不正确。',400);
@@ -81,7 +84,7 @@ export async function browserFetch(request:Request,env:BrowserEnv):Promise<Respo
     }
     const finish=path.match(/^\/browser\/uploads\/([^/]+)\/complete$/);
     if(finish&&request.method==='POST') {
-      const row=await ownedUpload(validId(finish[1]),owner,env);if(row.state==='complete')return json({uploadId:row.id});
+      const row=await ownedUpload(validId(finish[1]),owner,device,env);if(row.state==='complete')return json({uploadId:row.id});
       const parts=await env.DB.prepare('SELECT part_number,etag FROM browser_parts WHERE upload_id=? ORDER BY part_number').bind(row.id).all<{part_number:number;etag:string}>();
       if(parts.results.length!==Math.ceil(row.size/CHUNK)||parts.results.some((part,index)=>part.part_number!==index+1))throw new AppError('UPLOAD_INCOMPLETE','请完成所有分片后再提交。',409);
       const locked=await env.DB.prepare("UPDATE browser_uploads SET state='forwarding' WHERE id=? AND state='uploading'").bind(row.id).run();
@@ -90,15 +93,24 @@ export async function browserFetch(request:Request,env:BrowserEnv):Promise<Respo
       await forwardUpload(row,env,bria);return json({uploadId:row.id});
     }
     if(path==='/browser/jobs'&&request.method==='POST') {
-      const input=parseCloudInput(await body(request)),upload=await ownedUpload(input.uploadId,owner,env);
+      const input=parseCloudInput(await body(request)),upload=await ownedUpload(input.uploadId,owner,device,env);
       if(upload.state!=='complete')throw new AppError('UPLOAD_INCOMPLETE','视频尚未上传完成。',409);
-      await env.DB.prepare('INSERT INTO browser_jobs(id,owner) SELECT ?,? WHERE NOT EXISTS(SELECT id FROM jobs WHERE id=?) ON CONFLICT(id) DO NOTHING').bind(input.cloudJobId,owner,input.cloudJobId).run();
-      await ownedJob(input.cloudJobId,owner,env);
+      await env.DB.prepare('INSERT INTO browser_jobs(id,owner,device_id) SELECT ?,?,? WHERE NOT EXISTS(SELECT id FROM jobs WHERE id=?) ON CONFLICT(id) DO NOTHING').bind(input.cloudJobId,owner,device,input.cloudJobId).run();
+      await ownedJob(input.cloudJobId,owner,device,env);
       return publicJob(await submit(new Request(request.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)}),env,bria));
+    }
+    // Explicit, idempotent upgrade of locally known legacy jobs; never calls Bria.
+    const claim=path.match(/^\/browser\/jobs\/([^/]+)\/claim-device$/);
+    if(claim&&request.method==='POST') {
+      if(!device)throw new AppError('DEVICE_REQUIRED','请提供设备标识。',400);
+      const id=validId(claim[1]);
+      await env.DB.prepare("UPDATE browser_jobs SET device_id=? WHERE id=? AND owner=? AND device_id=''").bind(device,id,owner).run();
+      await ownedJob(id,owner,device,env);
+      return json({ok:true});
     }
     const job=path.match(/^\/browser\/jobs\/([^/]+)(\/artifact)?$/);
     if(job&&request.method==='GET') {
-      const id=validId(job[1]);await ownedJob(id,owner,env);
+      const id=validId(job[1]);await ownedJob(id,owner,device,env);
       if(!job[2])return publicJob(await status(id,env,bria));
       const row=await env.DB.prepare('SELECT state,status_json,params_json FROM jobs WHERE id=?').bind(id).first<{state:string;status_json:string;params_json:string}>();
       if(row?.state!=='completed')throw new AppError('NOT_READY','结果尚未完成。',409);

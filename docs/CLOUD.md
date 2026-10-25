@@ -173,3 +173,13 @@ Bria 模式约束仍按 [SOURCES.md](SOURCES.md) 的 S1–S7；本次没有引�
 2026-10-24 已应用 D1 0003 并发布版本 `4061e1a0-39eb-4d53-829f-c6efb18479f0`。生产私人链接已写入本机 `.tmp/cloud-access-link.txt`（Git 忽略）。发布后匿名检查仍被外层 Cloudflare Access 跳转，需按第 3 节禁用本项目 Access；目前尚未完成生产免登录兑换和真实抠图验收。
 
 2026-10-24 后续更新：永久 Token 模式已发布，版本 `ae8d003e-1ea9-44b3-b2c5-76f2bfcf7316`。`.tmp/cloud-access-link.txt` 现为永久可重复使用的链接。外层 Access 已解除；线上重复建立会话、health `processingReady=true`、匿名拒绝与独立退出验证通过。会话过期后重新打开该永久链接即可，Token 本身不自动过期；真实 Bria 抠图仍待验收。
+
+## APP 按设备隔离（2026-10-25）
+
+- 用户已明确授权修改服务并同步云端。迁移 `0005_device_scope.sql` 为 browser_jobs / browser_uploads 增加 device_id，原记录保留空值；先应用增量迁移，再发布 Worker。保留自定义域名 cutout.flttxq.top 与 workers.dev 入口。
+- 新 APP 请求携带 `X-Cutout-Device: dev_<64位小写十六进制摘要>`。任务及上传操作按账号 owner＋device_id 查询；不携带标识的旧网页只访问空设备命名空间。health 返回 deviceIsolation / deviceId，旧 APP 和网页不受新增字段影响。
+- `/browser/jobs/:id/claim-device` 仅用于本机已有旧任务升级，要求已认证账号和设备标识；原子地将空设备归属绑定一次，已属于其他设备的记录返回 404。重复绑定同一设备幂等，不访问 Bria，不改云 ID。旧版没有设备证据，不能追溯物理归属；同账号有相同旧任务记录时先绑定者取得归属，其他设备停止恢复，不另行提交。
+- 设备标识用于任务分区，来源由客户端声明，不等同硬件认证；共享账号凭据不是每设备独立密钥。原有账号认证、同源验证继续生效。已有旧网页历史若对应任务被 APP 绑定，网页将不能再访问该项。
+- Worker 回归 26/26，通过同账号不同设备的上传／任务／成品隔离、无 header 防绕过、旧任务竞争绑定与幂等；上游全 mock，不产生 Bria 费用。
+
+生产已应用 0005 并部署版本 `d8498bf5-f197-4379-8a78-318218ef7efe`（2026-10-25）；直接连接自定义域名的认证、设备 health、旧客户端兼容和非法设备拒绝检查通过，测试会话已注销。没有付费转换或既有任务归属变更。

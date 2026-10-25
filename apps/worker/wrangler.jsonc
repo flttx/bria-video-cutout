@@ -37,5 +37,11 @@
     "AUTH_MODE": "token",
     "ACCESS_TEAM_DOMAIN": "soft-mud-2976.cloudflareaccess.com",
     "ACCESS_AUD": "7f257371f25b1a6dd7d26a24f48347bb0432f38546d5c4c9c9e78091faa80115"
-  }
+  },
+  "routes": [
+    {
+      "pattern": "cutout.flttxq.top",
+      "custom_domain": true
+    }
+  ]
 }
