@@ -19,7 +19,11 @@ function cookie(request:Request):string {
 }
 export function sameOrigin(request:Request):void {
   const origin=request.headers.get('origin'),url=new URL(request.url);
-  if(origin&&origin!==url.origin)throw new AppError('ORIGIN_REJECTED','不允许跨站访问。',403);
+  // ESA preserves the public Origin while forwarding to the dedicated Worker host.
+  const allowedOrigin=origin===url.origin||(
+    url.origin==='https://cutout-origin.flttxq.top'&&origin==='https://cutout.flttxq.top'
+  );
+  if(origin&&!allowedOrigin)throw new AppError('ORIGIN_REJECTED','不允许跨站访问。',403);
   if(request.headers.get('sec-fetch-site')==='cross-site')throw new AppError('ORIGIN_REJECTED','不允许跨站访问。',403);
   if(request.method!=='GET'&&(!origin||request.headers.get('x-cutout-client')!=='1'))throw new AppError('CSRF','请求缺少同源验证。',403);
 }

@@ -40,7 +40,7 @@
   },
   "routes": [
     {
-      "pattern": "cutout.flttxq.top",
+      "pattern": "cutout-origin.flttxq.top",
       "custom_domain": true
     }
   ]

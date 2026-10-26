@@ -346,3 +346,96 @@
 - 生产烟测：只上传 147 字节合成日志；201 接收、同设备逐字节读回、跨设备 404、未登录 401、额外字段 400、health 与注销通过。没有上传用户任务日志，也没有 Bria 调用。
 
 - 本次生产烟测生成的合成日志对象已删除，测试会话已注销。
+
+## ESA 独立回源前置适配（2026-10-26）
+
+- [x] 用户控制台截图确认 `cutout.flttxq.top` 与 `cutout-origin.flttxq.top` 均绑定生产 Worker；DNS 均为 Worker 管理记录。当前活动版本截图显示短 ID `552dccf8`、100% 流量、Ready，与上节发布版本前缀一致。
+- [x] `sameOrigin()` 增加唯一代理配对：Worker URL origin 为 `https://cutout-origin.flttxq.top` 时允许 `Origin: https://cutout.flttxq.top`。保留原同源请求、cross-site 拒绝、非 GET 来源及客户端标记检查；不信任 X-Forwarded-Host，不放宽会话或账号／设备归属检查。
+- [x] Wrangler 同步双 Custom Domain，保留原入口；数据库、R2 和其他绑定未修改，无迁移。
+- [x] 新增两项本地 Miniflare 回归，覆盖精确域名及方向、协议／端口／伪装来源拒绝、CSRF、原域名登录、代理域名登录与注销、私有 R2 完整及 Range 下载、未登录／跨账号／跨设备／缺设备标记拒绝。该认证测试套件禁止上游联网，成品为本地合成数据。
+- [x] 初次检查因本机缺少已声明的 `@ffmpeg/ffmpeg`、`jose` 中断；恢复现有依赖后，`npm run typecheck`、`npm run test:worker`（30/30，含前端构建、Worker dry-run 与既有 Chromium 认证回归）、`git diff --check` 通过。依赖清单及锁文件未修改；Wrangler 提示检测到代理环境变量。
+- 初次本地适配完成时未部署、未切换 DNS；后续控制台配置及预检记录如下。本轮未创建收费任务，未提交或推送。
+
+### ESA 控制台配置、预检及 DNS 切换（2026-10-26）
+
+- [x] 用户执行部署并提供输出：版本 `dab7d180-78c4-428c-9ba1-73124f19a5db`，保留两个 Custom Domains。两个域名的 `/auth/token` 均已实测 HTTP 200、TLS 校验通过。
+- [x] 用户截图确认站点 TXT 验证完成，ESA 采用 CNAME 接入；分配的接入目标为 `cutout.flttxq.top.a1.initba.com`。源站为 `cutout-origin.flttxq.top`，回源 Host 跟随源站域名。
+- [x] Cloudflare 灰云 DCV CNAME `_acme-challenge.cutout` 指向 `cutout.flttxq.top.185618179594468.dcv.aliyun-esa.com`；截图确认 Let's Encrypt 证书覆盖用户域名、状态正常、到期 2027-01-24，SSL/TLS 已开启。DCV 记录须保留供自动续签。
+- [x] 用户已按步骤保存并启用 HTTPS 回源规则；SNI 保持页面说明的默认行为（与回源 Host 相同）。绕过缓存规则截图确认只匹配 `cutout.flttxq.top`，已启用且列表只有这一条，未额外配置浏览器缓存时间。
+- [x] `curl --connect-to` 指向 ESA 接入 CNAME，保留用户域名 Host/SNI、未跳过证书校验：首页 HEAD 200；匿名 health GET 401 `LOGIN_REQUIRED`，响应包含 `Server: ESA`、`x-site-cache-status: DYNAMIC`，私有接口保留 `Cache-Control: no-store`。POST 无效合成 Token 返回 401 `TOKEN_INVALID`，第三方 Origin 返回 403 `ORIGIN_REJECTED`，缺客户端标记返回 403 `CSRF`。未使用真实登录凭据或提交抠图。
+- [x] curl 已禁用显式代理，但远端地址为 `198.18.1.193`，仍经过本机 TUN；此测试只证明 ESA 路由与基础响应，不证明手机直连速度或带身份完整下载。
+- [x] 为最终切换准备，本地 Wrangler routes 改为仅保留 `cutout-origin.flttxq.top`；尚未再次部署，线上域名绑定和 DNS 仍由用户按步骤切换。回退时本地同步恢复双域名配置。
+- [x] 用户已完成 Cloudflare DNS 切换：截图确认 `cutout` 为指向 `cutout.flttxq.top.a1.initba.com` 的普通灰云 CNAME，`cutout-origin` 保留 Worker 管理记录，DCV 与归属 TXT 均保留。Google 与 Cloudflare 公共 DNS 的实时 DoH 查询均返回该接入 CNAME（TTL 300）。
+- [x] 不再使用 `--connect-to`，直接请求正式域名：首页 GET 200、匿名 health GET 401，TLS 校验通过；两者均返回 `Server: ESA`、`x-site-cache-status: DYNAMIC`，health 保留 `Cache-Control: no-store`。当前入口已实测经过 ESA；本机远端地址仍为 TUN 地址 `198.18.1.195`，不作为手机直连测速。
+- 当时待验证真实登录、会话 Cookie、私有成品完整下载与 Range、账号／设备隔离；后续电脑物理网卡测试见下文，生产跨账号隔离仍未验收。用户指定改用电脑绕过代理验收，不继续要求手机验证。DNS 和基础 HTTP 切换通过不代表完整业务验收或性能改善。
+
+### 电脑物理网卡直连验证（2026-10-26，存在慢速及不完整传输）
+
+- [x] 按用户要求绕过显式代理和 Mielink TUN：复用播放器诊断工具的 `PhysicalHTTPS`，每连接设置 Windows `IP_UNICAST_IF=20` 并绑定当前 Realtek 物理以太网地址；读取套接字选项确认网卡索引，核对实际 peer 为公网 IP，保留 TLS 主机名与证书校验。未停用代理、未修改系统路由或其他网络配置。
+- [x] AliDNS DoH 本身也绑定物理网卡直连 `223.5.5.5`。观察到访问域名 A 查询有时返回旧 Cloudflare 地址，而同一解析器的 CNAME 查询及 Google／Cloudflare CNAME 查询指向 ESA；不能把这些旧地址的测速归入 ESA。最终通过已分配 ESA 接入 CNAME 查询真实节点，保留 `cutout.flttxq.top` 的 Host/SNI。
+- [x] 两个 ESA 节点匿名 health 均返回 401 `LOGIN_REQUIRED`，TLS 正常，总耗时约 0.234／0.312 秒。初轮一个 8 MiB 静态分段在 1.578 秒内完整下载（5.316 MB/s），SHA-256 与本地构建一致；随后另一个分段超时，未据单个快样本判定稳定。
+- [x] 最终固定 ESA 节点 `223.111.27.102`，顺序读取站点 FFmpeg core 的四个公开分段（合计应为 32,232,419 字节），响应均为 HTTP 200、`Server: ESA`、`x-site-cache-status: DYNAMIC`：core-0 在 30.875 秒收到 329,434 字节后到达诊断时限；core-1 在 30.437 秒收到 497,245 字节后到达诊断时限；core-2 在 1.313 秒完整收到 8,388,608 字节（6.389 MB/s）并通过 SHA-256；core-3 在 25.953 秒后提前结束，仅收到 284,800／7,066,595 字节。整体 INCOMPLETE，未证明下载问题已解决。
+- 限制：本机未找到可用的既有访问链接／构建凭据，现有旧 APK 不包含 cloud config；没有创建新授权或绕过鉴权。上述为公开静态资源的实际传输，不能冒充私有 R2 视频下载验收。尚未定位慢速属于客户端到 ESA 还是 ESA 回源链路，未更改线上规则。
+- 本地可复现脚本 `.tmp/esa-direct-check.py`、脱敏结果 `.tmp/esa-direct-result.json`；脚本依赖本机物理网卡及已有诊断工具，未纳入 Git。文档差异检查通过，无 Bria 调用。
+
+### 指定视频真实全流程验收（2026-10-26）
+
+- [x] 用户随后生成永久访问链接，并指定 `D:\桌面\视频\world-bench-preview.mp4` 进行完整测试。沿用物理网卡绑定直连 ESA、正式域名 Host/SNI 与 TLS 校验；凭据仅从本地忽略文件读取，没有输出 Token、Cookie 或上游签名地址。
+- [x] 使用项目现有媒体准备及成品验证代码，执行登录、上传、完成上传、创建 Bria 任务、轮询、下载、白底成片输出与注销。独占任务账本在联网前创建；真实任务创建 POST 仅一次，没有因下载中断重复付费提交。账本保护的离线自测通过。
+- [x] 原视频 5,422,807 字节，1280×800、11.04 秒、265 帧、无音轨；准备后上传 5,661,407 字节。视频上传正文耗时 2.390 秒，任务提交至观察到完成耗时 35.782 秒；两项并非完整流程总耗时。
+- [x] 首次完整成品下载耗时 106.485 秒，共 4 次请求（3 次断点恢复），最终得到 2,434,451 字节。前三次分别发生超时或正文提前结束，末次成功补齐；后续响应命中私有 R2，均经过 ESA。流程完成不代表慢速及断流问题已解决，故障链路仍未定位。
+- [x] 独立执行下载至 1 MiB 后主动中断、Range 续传，响应 206；恢复文件与首次完整文件逐字节一致。成品 SHA-256：`4ba48ed71f5816bd743b2c49709b577cdd6ce0bbadbd23769101afbad8b7f85e`。最终白底文件与下载文件一致。
+- [x] 成品 H.264/yuv420p，1280×800、11.04 秒、265 帧、无音轨，FFmpeg 全片解码通过。抽查约 1、5、10 秒画面，浣熊与长椅保留、背景替换为白色；部分画面仍有草叶残留，不视为精细抠图质量验收通过。
+- [x] 本次测试会话已注销，注销后 health 返回 401。此前小视频私有下载也已完成并验证续传及设备限制；跨账号生产隔离仍以本地回归为依据，未做本次生产双账号验收。
+- 验证范围：电脑物理网卡上的真实 API 业务流程及本地原生媒体处理；没有把它等同于网页交互或浏览器 WASM 全流程验收。本次未修改线上规则、未再次部署、未提交或推送代码。
+- 成片：`.tmp/esa-world-bench/world-bench-cutout-white.mp4`；脱敏结果：`.tmp/esa-world-bench/summary.json`；单次提交账本及复现脚本在同目录，均未纳入 Git。
+
+### ESA 与 Cloudflare 源站下载对照（2026-10-26）
+
+- [x] 按用户要求复用上述 2,434,451 字节成品，以相同物理网卡、HTTP/1.1、独立域名会话交替进行 14 次完整 GET 下载；每次最长约 35 秒，未自动续传以免掩盖失败。每次均核对公网 peer、网卡绑定、TLS 和 R2 来源，收到的每个数据块均与本地基准比对；完成的下载额外校验 SHA-256。未创建任务、未重新调用 Bria。
+- [x] 直连 `cutout-origin.flttxq.top` 的两个 Cloudflare 地址共 7 次，全部完整成功，耗时 2.609～3.844 秒，平均传输速率约 633～933 KB/s；响应标记的 Cloudflare POP 为 SEA、SJC 或 LAX。
+- [x] 经过 ESA 的 4 个解析地址共 7 次，3 次完整成功（0.891～1.265 秒，约 1.92～2.73 MB/s），4 次未完成（约 11.72～16.62 KB/s）。其中 `223.111.27.14` 的 3 次均异常，收到 348,361～581,632 字节；`223.111.27.17` 一次 1.265 秒成功、一次 35.015 秒仅收到 479,953 字节。失败包含 3 次诊断超时及 1 次正文提前结束，不把诊断时限等同于服务器主动断开。
+- [x] 所有 ESA 样本均 `DYNAMIC`、`no-store`、来源 `r2`、Cloudflare POP 标记 HKG。快速及慢速样本均未命中 ESA 缓存，因此“没有缓存”不能独立解释本次巨大差异。该 POP 标记属于 Cloudflare，不能当作 ESA 节点位置或 R2 存储区域。
+- 结论：本轮对照将异常范围缩小到经过 ESA 的请求路径；未定位客户端到 ESA、ESA 内部还是 ESA 到 Cloudflare 回源哪一段。两条路径实际使用的 Cloudflare POP 不同，故不能据此排除 HKG 相关回源／读取路径的问题，也不能断言为某个固定 ESA IP 故障。
+- [x] 两轮共 4 个独立测试会话均注销，后续 health 均 401。没有修改 DNS、代理、系统路由、ESA 规则或业务代码，没有部署／提交／推送。
+- 证据及复现：`.tmp/esa-world-bench/compare-routes.py`、`route-comparison.json`、`route-comparison-followup.json`。后者保存失败及成功请求的 EagleId／CF-Ray，可用于阿里云工单追踪，不含认证 Cookie、Token 或上游签名地址。建议先由 ESA 侧核查这些请求的接入与回源传输，暂不扩大私有资源缓存或固定节点 IP。
+
+### 当前排查交接：日志套餐限制与待办（2026-10-26）
+
+- 当前状态：业务 API 全流程、完整解码和断点续传已通过；ESA 路径间歇性慢速／不完整传输尚未解决。现有对照只证明本轮 ESA 路径比直连源站更不稳定，**没有证实根因就是 ESA 回源慢**。
+- 原拟通过 ESA「分析和日志 → 即时日志」同步抓取下载请求。用户反馈当前基础版控制台要求订阅标准套餐才能使用即时日志；尚未开通、升级或付费，也未获取 ESA 端逐请求日志。此前建议入口时未核实套餐限制，后续不能把该步骤当作已可用。
+- 已核对官方[站点即时日志字段说明](https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/instant-log)：可观察 `OriginTCPHandshakeDurationMs`、`OriginTLSHandshakeDurationMs`、`OriginResponseDurationMs`、`EdgeResponseTime`、`EdgeResponseBodyBytes`。其中 `OriginResponseDurationMs` 是源站**首字节**耗时，不能用其正常来证明整个视频正文回源正常。即时日志与实时日志投递是不同功能，不能以实时日志的套餐说明替代即时日志权限核查。
+- [x] 已在对话提供可复制给阿里云 AI 助理的完整咨询内容，包括基础版限制、站点 ID `185618179594468`、域名、架构、14 次对照结果及下列 EagleId，要求优先提供不升级套餐的诊断入口，并明确 AI 是否具有实际查询权限。
+
+| 请求表现 | EagleId |
+| --- | --- |
+| 慢：35 秒未完成 | `df6f1b2817929870705862003e` |
+| 慢：正文提前结束 | `df6f1b2b17929871135946963e` |
+| 慢：35 秒未完成 | `df6f1b2b17929871491444806e` |
+| 快：1.265 秒完整下载 | `df6f1b1817929871123386035e` |
+
+- [ ] 等用户提供阿里云 AI 助理回复，核对基础版是否有免费可用的日志／诊断入口；尚无助理回复、人工技术结论或已提交工单的证据。助手没有代发消息或工单。
+- [ ] 若需要人工支持，用上述 EagleId 及本地脱敏记录请求核查：回源连接、正文接收耗时与字节数、重试／超时／断开，以及向客户端发送阶段的异常；不要只查看首字节指标。如平台没有这些可见字段，明确请求技术支持内部追踪，不臆造控制台字段。
+- [ ] 备选实验：使用无敏感内容、大小相近的合成文件，在尽量相同的 ESA 节点反复对照明确 `HIT` 与绕过缓存的传输；HIT 也慢则问题不只在回源，HIT 快而回源慢则增加回源路径异常的证据。该实验仅为待执行方案，尚未创建文件、添加缓存规则或部署；不能把私人视频直接设为公共缓存。
+- 继续工作约束：优先不升级套餐；使用已有成品，不再提交付费 Bria 任务；保留登录和账号／设备归属校验；不因单次测速固定 ESA IP。现有业务代码和 Wrangler 的未提交改动保留，本次仅补充进度记录，没有再次部署或更改线上配置。
+
+### ESA 分段判别探针：绕过缓存基线（2026-10-26）
+
+- [x] 新增只读脚本 `.tmp/esa-world-bench/esa-leg-probe.py`（未纳入 Git）：物理网卡、公开 `/ffmpeg/core-2.bin`（8 MiB）、逐节点重复下载，记录缓存状态、1/2/5/10 秒字节数、最长空闲间隔及 Windows TCP_INFO（RTT、乱序）；`--label` 区分运行，结果写入 `leg-probe-<label>.json`。不使用认证、不调用 Bria。
+- [x] 基线（label=bypass，3 轮，ESA 四个节点＋Cloudflare 源站各 3 次，缓存均为 DYNAMIC）：ESA 12 次中仅 4 次完整，成功时 4.2～9.4 MB/s，失败多为数秒级停顿后卡在 11～14 KB/s 或超时；源站 3/3 完整，约 0.9～3.7 MB/s。客户端到 ESA 的 TCP RTT 稳定约 7～12 ms，无乱序字节，失败样本也是如此；到源站 RTT 约 167～189 ms。
+- 解读：客户端到 ESA 的链路延迟低，不像整体链路拥塞；失败表现为数据流中途停止（最长空闲 2.4～5 s）。这与 ESA 等待回源数据相符，但接收端看不到对端重传，**尚未证实**。判别需要缓存命中对照（`cache=HIT`）：HIT 稳定快则指向回源段；HIT 同样停顿则指向 ESA 到客户端段。
+- [ ] 待用户在 ESA 为公开静态路径 `/ffmpeg/*` 单独加缓存规则（排在绕过缓存规则之前；不得覆盖私有接口），再运行 `python -I esa-leg-probe.py --label cached --rounds 6`，确认出现 `HIT` 后对比；完成后删除该规则。
+
+### ESA 分层链路线索与再次基线（2026-10-26）
+
+- [x] 公开 `/ffmpeg/core-2.bin` 的 ESA 响应 `Via` 头：`ens-cache38.l2hk12 → ens-cache48.l2sg7 → ens-cache16.cn4502 → ens-cache16.cn4502`。按 Via 追加顺序理解，回源经过香港二级、新加坡二级，再到国内边缘节点，即 ESA 内部为 Cloudflare(HKG) → 香港 → 新加坡 → 国内边缘的多跳链路；这是回源段含跨境多跳的直接证据，但哪一跳停顿尚未定位。首字节时间标注约 153／191／292 ms，正常，说明问题在正文传输而非响应头。
+- [x] Worker 静态资源不支持 Range（请求 `bytes=` 仍返回 200 整文件，无 `Accept-Ranges`），所以 `.tmp/esa-world-bench/esa-range-probe.py` 的分片对照无效，不能得出分片与长连接差异的结论；该脚本只保留作头部检查。
+- [x] 再次基线（label=bypass2）：ESA 8 次全部未完整（97～204 KB/s 或卡死），源站 1/2 完整、1 次连接超时。劣化程度高于第一轮（4/12 完整），期间我连续发起了多轮 8 MiB 测试，不能排除时段拥塞或测试自身负载影响，需错开时间复测。
+- [ ] 仍待 `/ffmpeg/*` 缓存规则后的 HIT 对照，见上节。
+
+### ESA 缓存命中对照与国内镜像控制组（2026-10-26）
+
+- [x] 用户已为公开路径 `/ffmpeg/*` 添加缓存规则并修改绕过规则排除该路径。`esa-leg-probe.py --label cached --rounds 6`：ESA 共 28 次，其中 26 次 `x-site-cache-status: HIT`（另 2 次首轮 MISS），**28 次全部未在 20 秒内完整下载**，收到 0.5～2.3 MB，速率约 24～98 KB/s，最长空闲间隔 1.9～17.2 s；RTT 多数约 7～14 ms，偶发 180～454 ms。同一时段 Cloudflare 源站 6 次中 2 次完整、3 次部分、1 次超时。
+- 结论更新：命中缓存后仍然停顿，说明停顿**不是 ESA 回源 Cloudflare 的段**；此前"回源段嫌疑"的推断不成立（上节 Via 多跳仅证明回源链路含跨境，不是本次停顿的原因）。问题落在 ESA 边缘节点到客户端这一段，或该时段本机／运营商路径整体劣化（源站同时也退化，不能排除）。
+- [x] 控制组 `.tmp/esa-world-bench/control-probe.py`：同一物理网卡下载阿里云镜像（`mirrors.aliyun.com`，需 User-Agent）8 MiB Range，6 次均稳定 300～311 KB/s，最长空闲间隔不超过 0.47 s，无停顿。说明本机网卡及到该国内目的地的路径本身没有秒级停顿，但速率恒定约 300 KB/s 可能是镜像单连接限速，不代表带宽上限。
+- [ ] 下一步：换一个运营商网络（手机热点）重复同一探针，区分"本运营商到该 ESA 节点段"与"ESA 节点本身"；仍然停顿则提交阿里云工单，附 EagleId 及 `leg-probe-cached.json`。缓存规则为临时测试，测完需删除并恢复整主机绕过缓存。

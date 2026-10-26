@@ -17,9 +17,102 @@ async function grant(owner='alice',expires=Date.now()+60000){
   const token=randomBytes(32).toString('hex');
   await db.prepare('INSERT INTO browser_access_grants(token_hash,owner,expires_at) VALUES(?,?,?)').bind(hash(token),owner,expires).run();return token;
 }
-function call(path:string,body?:unknown,cookie='',extra:Record<string,string>={}) {
-  return mf.dispatchFetch('https://app.example'+path,{method:body===undefined?'GET':'POST',headers:{Origin:'https://app.example','X-Cutout-Client':'1','Content-Type':'application/json',Cookie:cookie,...extra},body:body===undefined?undefined:JSON.stringify(body)});
+function call(path:string,body?:unknown,cookie='',extra:Record<string,string>={},base='https://app.example') {
+  return mf.dispatchFetch(base+path,{method:body===undefined?'GET':'POST',headers:{Origin:base,'X-Cutout-Client':'1','Content-Type':'application/json',Cookie:cookie,...extra},body:body===undefined?undefined:JSON.stringify(body)});
 }
+
+const publicOrigin='https://cutout.flttxq.top',workerOrigin='https://cutout-origin.flttxq.top';
+function esaCall(path:string,body?:unknown,cookie='',extra:Record<string,string>={}) {
+  return call(path,body,cookie,{Origin:publicOrigin,'Sec-Fetch-Site':'same-origin',...extra},workerOrigin);
+}
+
+test('ESA permits only the exact origin pair and preserves CSRF checks',async()=>{
+  const token=await grant('esa-origins');
+  const cases=[
+    {name:'third-party origin',headers:{Origin:'https://evil.example'},code:'ORIGIN_REJECTED'},
+    {name:'HTTP public origin',headers:{Origin:'http://cutout.flttxq.top'},code:'ORIGIN_REJECTED'},
+    {name:'lookalike host',headers:{Origin:publicOrigin+'.evil.example'},code:'ORIGIN_REJECTED'},
+    {name:'nonstandard port',headers:{Origin:publicOrigin+':8443'},code:'ORIGIN_REJECTED'},
+    {name:'opaque origin',headers:{Origin:'null'},code:'ORIGIN_REJECTED'},
+    {name:'missing origin',headers:{Origin:''},code:'CSRF'},
+    {name:'missing client marker',headers:{'X-Cutout-Client':''},code:'CSRF'},
+    {name:'cross-site metadata',headers:{'Sec-Fetch-Site':'cross-site'},code:'ORIGIN_REJECTED'},
+    {name:'forwarded host cannot authorize origin',headers:{Origin:'https://evil.example','X-Forwarded-Host':'cutout.flttxq.top'},code:'ORIGIN_REJECTED'},
+  ];
+  for(const item of cases) {
+    const response=await esaCall('/auth/session',{token},'',item.headers);
+    assert.equal(response.status,403,item.name);
+    assert.equal((await response.json() as {code:string}).code,item.code,item.name);
+  }
+  for(const base of ['https://app.example',publicOrigin,'https://cutout-origin.flttxq.top:8443']) {
+    const response=await call('/auth/session',{token},'',{Origin:base===publicOrigin?workerOrigin:publicOrigin},base);
+    assert.equal(response.status,403,'pair is restricted to the exact destination and direction');
+    assert.equal((await response.json() as {code:string}).code,'ORIGIN_REJECTED');
+  }
+  for(const method of ['POST','PUT','DELETE']) {
+    for(const headers of [{Origin:publicOrigin},{'X-Cutout-Client':'1'}]) {
+      const response=await mf.dispatchFetch(workerOrigin+'/browser/uploads',{method,headers});
+      assert.equal(response.status,403,method+' requires both origin and client marker');
+      assert.equal((await response.json() as {code:string}).code,'CSRF');
+    }
+  }
+  const accepted=await esaCall('/auth/session',{token});
+  assert.equal(accepted.status,200,'rejected requests did not redeem the grant');
+  const cookie=accepted.headers.get('set-cookie')!.split(';')[0]!;
+  assert.equal((await esaCall('/auth/logout',{},cookie)).status,200);
+  assert.equal((await call('/auth/session',{token:await grant('direct')},'',{},publicOrigin)).status,200,'original domain still works');
+  assert.equal((await mf.dispatchFetch(workerOrigin+'/browser/health')).status,401,'GET without Origin still requires a session');
+});
+
+test('ESA login preserves private R2 downloads, Range, owner/device isolation and logout',async()=>{
+  const login=await esaCall('/auth/session',{token:await grant('esa-owner')});
+  assert.equal(login.status,200);
+  assert.match(login.headers.get('set-cookie')!,/HttpOnly; Secure; SameSite=Strict/);
+  const cookie=login.headers.get('set-cookie')!.split(';')[0]!;
+  const device='dev_'+'a'.repeat(64),otherDevice='dev_'+'b'.repeat(64);
+  const health=await esaCall('/browser/health',undefined,cookie,{'X-Cutout-Device':device});
+  assert.equal(health.status,200);
+  assert.equal((await health.json() as {userId:string}).userId,'esa-owner');
+
+  // Seed a completed private result locally; outbound calls are forbidden by this suite.
+  const id=crypto.randomUUID(),uploadId=crypto.randomUUID(),now=Date.now();
+  await db.prepare('INSERT INTO uploads(id,file_url,created_at,expires_at) VALUES(?,?,?,?)')
+    .bind(uploadId,'https://example.com/input.mp4',now,now+60000).run();
+  await db.prepare('INSERT INTO jobs(id,upload_id,fingerprint,params_json,state,status_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+    .bind(id,uploadId,id,JSON.stringify({mode:'auto'}),'completed',JSON.stringify({result:{video_url:'https://example.com/result.mp4'}}),now,now).run();
+  await db.prepare('INSERT INTO browser_jobs(id,owner,device_id) VALUES(?,?,?)').bind(id,'esa-owner',device).run();
+  const bucket=await mf.getR2Bucket('STAGING');
+  await bucket.put('results/'+id,'result-video');
+  const path='/browser/jobs/'+id+'/artifact';
+  const full=await esaCall(path,undefined,cookie,{'X-Cutout-Device':device});
+  assert.equal(full.status,200);
+  assert.equal(full.headers.get('cache-control'),'no-store');
+  assert.equal(full.headers.get('content-length'),'12');
+  assert.equal(full.headers.get('x-cutout-source'),'r2');
+  assert.equal(await full.text(),'result-video');
+  const partial=await esaCall(path,undefined,cookie,{'X-Cutout-Device':device,Range:'bytes=7-'});
+  assert.equal(partial.status,206);
+  assert.equal(partial.headers.get('content-range'),'bytes 7-11/12');
+  assert.equal(partial.headers.get('content-length'),'5');
+  assert.equal(await partial.text(),'video');
+
+  const otherLogin=await esaCall('/auth/session',{token:await grant('esa-other-owner')});
+  assert.equal(otherLogin.status,200);
+  const otherCookie=otherLogin.headers.get('set-cookie')!.split(';')[0]!;
+  for(const denied of [
+    {cookie:'',device,status:401},
+    {cookie:otherCookie,device,status:404},
+    {cookie,device:otherDevice,status:404},
+    {cookie,device:undefined,status:404},
+  ]) {
+    const response=await esaCall(path,undefined,denied.cookie,{Range:'bytes=7-',...(denied.device?{'X-Cutout-Device':denied.device}:{})});
+    assert.equal(response.status,denied.status);
+    assert.equal(response.headers.get('cache-control'),'no-store');
+    assert.doesNotMatch(await response.text(),/result-video|example\.com/);
+  }
+  assert.equal((await esaCall('/auth/logout',{},cookie)).status,200);
+  assert.equal((await esaCall(path,undefined,cookie,{'X-Cutout-Device':device})).status,401);
+});
 test('single-use grant has atomic redemption, secure cookie, identity, revocation and no bearer leakage',async()=>{
   const token=await grant();
   const responses=await Promise.all([call('/auth/session',{token}),call('/auth/session',{token})]);
