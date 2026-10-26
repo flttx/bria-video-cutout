@@ -150,6 +150,43 @@ test('artifacts resume with Range from upstream, are copied to R2, then resume f
   assert.equal((await call(path,undefined,bob,'GET',{Range:'bytes=7-'})).status,404,'cache does not bypass ownership');
 });
 
+test('deleting a job removes its result, rows and unused upload; it is owner and device scoped, repeatable and never calls Bria',async()=>{
+  const a={'X-Cutout-Device':'dev_'+'e'.repeat(64)},b={'X-Cutout-Device':'dev_'+'f'.repeat(64)};
+  const remove=(id:string,token=alice,headers:Record<string,string>=a)=>call('/browser/jobs/'+id,undefined,token,'DELETE',headers);
+  const {uploadId}=await (await call('/browser/uploads',{size:16},alice,'POST',a)).json() as {uploadId:string};
+  assert.equal((await call(`/browser/uploads/${uploadId}/parts/1`,new Uint8Array(16),alice,'PUT',{...a,'Content-Length':'16'})).status,200);
+  assert.equal((await call(`/browser/uploads/${uploadId}/complete`,{},alice,'POST',a)).status,200);
+  const id=randomUUID(),start=submitted;
+  assert.equal((await call('/browser/jobs',{cloudJobId:id,uploadId,mode:'auto',meta:{width:320,height:180,duration:1,fps:24,frames:24}},alice,'POST',a)).status,202);
+  await db.prepare('UPDATE jobs SET next_poll_at=0 WHERE id=?').bind(id).run();
+  assert.match(await (await call('/browser/jobs/'+id,undefined,alice,'GET',a)).text(),/completed/);
+  assert.equal(await (await call('/browser/jobs/'+id+'/artifact',undefined,alice,'GET',a)).text(),'result-video');
+  const bucket=await mf.getR2Bucket('STAGING');
+  for(let i=0;i<50&&!await bucket.head('results/'+id);i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(await bucket.head('results/'+id),'result cached before delete');
+  const count=async(sql:string,...values:unknown[])=>(await db.prepare(sql).bind(...values).first<{n:number}>())!.n;
+  for(const [token,headers] of [[bob,a],[alice,b],[alice,{}]] as const)assert.equal((await remove(id,token,headers)).status,404,'foreign owner or device cannot delete');
+  assert.ok(await bucket.head('results/'+id),'denied delete keeps the result');
+  assert.equal(await count('SELECT COUNT(*) n FROM jobs WHERE id=?',id),1);
+  assert.equal((await remove(id)).status,200);
+  assert.equal(await bucket.head('results/'+id),null,'cached result removed');
+  assert.equal(await count('SELECT COUNT(*) n FROM jobs WHERE id=?',id),0);
+  assert.equal(await count('SELECT COUNT(*) n FROM browser_jobs WHERE id=?',id),0);
+  assert.equal(await count('SELECT COUNT(*) n FROM browser_uploads WHERE id=?',uploadId),0,'unused upload record removed');
+  assert.equal(await count('SELECT COUNT(*) n FROM browser_parts WHERE upload_id=?',uploadId),0);
+  assert.equal(await count('SELECT COUNT(*) n FROM uploads WHERE id=?',uploadId),0);
+  assert.equal((await call('/browser/jobs/'+id,undefined,alice,'GET',a)).status,404);
+  const again=await remove(id);assert.equal(again.status,404,'repeat delete is a 404');assert.equal((await again.json() as {code:string}).code,'CLOUD_JOB_NOT_FOUND');
+  assert.equal(submitted,start+1,'delete never calls Bria');
+  // An upload still used by another job survives the first job's removal.
+  const shared=await upload(),first=randomUUID(),second=randomUUID(),now=Date.now();
+  await call('/browser/jobs',{cloudJobId:first,uploadId:shared,mode:'auto',meta:{width:320,height:180,duration:1,fps:24,frames:24}});
+  await db.prepare("INSERT INTO jobs(id,upload_id,fingerprint,params_json,state,created_at,updated_at) VALUES(?,?,?,?,'processing',?,?)").bind(second,shared,'other-fingerprint','{"mode":"auto"}',now,now).run();
+  assert.equal((await remove(first,alice,{})).status,200);
+  assert.equal(await count('SELECT COUNT(*) n FROM browser_uploads WHERE id=?',shared),1,'shared upload kept');
+  assert.equal(await count('SELECT COUNT(*) n FROM jobs WHERE id=?',second),1);
+});
+
 test('manual diagnostics are private, device scoped, schema limited and never submit Bria',async()=>{
   const a={'X-Cutout-Device':'dev_'+'a'.repeat(64)},b={'X-Cutout-Device':'dev_'+'b'.repeat(64)};
   const row={time:Date.now(),run:'1234abcd',task:'123456abcdef',event:'sample',lane:0,values:[65536,65536,1200,3]};

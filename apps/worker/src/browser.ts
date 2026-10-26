@@ -94,6 +94,27 @@ async function forwardUpload(row:Upload,env:BrowserEnv,bria:BriaHttpClient) {
   await env.DB.batch([env.DB.prepare('INSERT INTO uploads(id,file_url,created_at,expires_at) VALUES(?,?,?,?)').bind(row.id,grant.file_url,now,now+86400000),env.DB.prepare("UPDATE browser_uploads SET state='complete' WHERE id=?").bind(row.id)]);
   await env.STAGING.delete('uploads/'+row.id);
 }
+// Removes one owned job and everything stored for it: the cached result in R2, the job rows and, when no other job
+// uses the same upload, the upload record and any leftover staging object. Bria exposes no cancel call, so an
+// unfinished upstream request simply stops being tracked. Calling it again for a gone job answers 404.
+async function removeJob(id:string,owner:string,device:string,env:BrowserEnv) {
+  // A distinct code lets clients tell "job already gone" from an unknown route on a server without this endpoint.
+  if(!await env.DB.prepare('SELECT id FROM browser_jobs WHERE id=? AND owner=? AND device_id=?').bind(id,owner,device).first())throw new AppError('CLOUD_JOB_NOT_FOUND','云端任务不存在或已删除。',404);
+  const row=await env.DB.prepare('SELECT upload_id FROM jobs WHERE id=?').bind(id).first<{upload_id:string}>();
+  const uploadId=row?.upload_id;
+  await env.STAGING.delete('results/'+id);
+  const statements=[env.DB.prepare('DELETE FROM jobs WHERE id=?').bind(id),env.DB.prepare('DELETE FROM browser_jobs WHERE id=? AND owner=? AND device_id=?').bind(id,owner,device)];
+  if(uploadId) {
+    const unused='NOT EXISTS(SELECT 1 FROM jobs WHERE upload_id=?)';
+    statements.push(
+      env.DB.prepare(`DELETE FROM browser_parts WHERE upload_id IN(SELECT id FROM browser_uploads WHERE id=? AND owner=? AND device_id=?) AND ${unused}`).bind(uploadId,owner,device,uploadId),
+      env.DB.prepare(`DELETE FROM browser_uploads WHERE id=? AND owner=? AND device_id=? AND ${unused}`).bind(uploadId,owner,device,uploadId),
+      env.DB.prepare(`DELETE FROM uploads WHERE id=? AND ${unused}`).bind(uploadId,uploadId));
+  }
+  await env.DB.batch(statements);
+  if(uploadId&&!await env.DB.prepare('SELECT id FROM jobs WHERE upload_id=?').bind(uploadId).first())await env.STAGING.delete('uploads/'+uploadId);
+  return json({ok:true});
+}
 export async function browserFetch(request:Request,env:BrowserEnv,ctx?:ExecutionContext):Promise<Response> {
   try {
     const owner=await browserIdentity(request,env),path=new URL(request.url).pathname;
@@ -154,6 +175,7 @@ export async function browserFetch(request:Request,env:BrowserEnv,ctx?:Execution
       return json({ok:true});
     }
     const job=path.match(/^\/browser\/jobs\/([^/]+)(\/artifact)?$/);
+    if(job&&!job[2]&&request.method==='DELETE') return await removeJob(validId(job[1]),owner,device,env);
     if(job&&request.method==='GET') {
       const id=validId(job[1]);await ownedJob(id,owner,device,env);
       if(!job[2])return publicJob(await status(id,env,bria));
