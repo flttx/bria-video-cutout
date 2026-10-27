@@ -6,6 +6,7 @@ import type { ExportResult, Job, JobInput } from "./api";
 interface Props {
   file:File|null;videoId:string|null;videoReady:boolean;duration:number;mode:JobInput["mode"];prompt:string;points:JobInput["points"];
   color:string;onBusy:(busy:boolean)=>void;onResultSettled:()=>void;
+  onVideoImported:(id:string,meta:{width:number;height:number;duration:number})=>void;
   view:"source"|"result";onEditSource:()=>void;colorLabel:(name:string)=>string;
 }
 const LABELS:Record<string,string>={queued:"等待本地队列",preparing:"裁剪与准备视频",uploading:"上传视频到 Bria",submitting:"提交 Bria 任务",processing:"Bria 正在处理",downloading:"下载抠图结果",exporting:"本地合成与编码",completed:"处理完成",failed:"处理失败"};
@@ -23,6 +24,7 @@ const uploadVideo=importVideo;
 
 export default function useProcessing(props:Props) {
   const [start,setStart]=useState(0),[end,setEnd]=useState(0),[reusable,setReusable]=useState(true);
+  const [clipEdited,setClipEdited]=useState(false);
   const [job,setJob]=useState<Job|null>(null),[output,setOutput]=useState<ExportResult|null>(null);
   const [pending,setPending]=useState<JobInput|null>(()=>{try{return JSON.parse(readStored(PENDING_JOB)??"null") as JobInput|null;}catch{return null;}});
   const [working,setWorking]=useState(false),[message,setMessage]=useState("");
@@ -50,7 +52,7 @@ export default function useProcessing(props:Props) {
   const limit=props.mode==="auto"?60:5;
   const selectedDuration=Math.max(0,end-start);
   const validClip=Number.isFinite(start)&&Number.isFinite(end)&&start>=0&&end>start&&end<=props.duration&&selectedDuration<=limit+.0001;
-  const durationStatus=!props.file&&!props.videoId?"上传后自动检查时长，超时可选择处理片段。":props.duration<=0?"正在读取视频时长…":props.duration>limit?(validClip?`所选片段 ${selectedDuration.toFixed(2)} 秒，符合当前模式的 ${limit} 秒上限。`:`视频时长 ${props.duration.toFixed(2)} 秒，超过当前模式的 ${limit} 秒上限，请调整片段范围。`):`视频时长 ${props.duration.toFixed(2)} 秒，符合当前模式的 ${limit} 秒上限。`;
+  const durationStatus=!props.file&&!props.videoId?"上传后自动检查时长，超时可选择处理片段。":props.duration<=0?"正在读取视频时长…":props.duration>limit||clipEdited?(validClip?`所选片段 ${selectedDuration.toFixed(2)} 秒，符合当前模式的 ${limit} 秒上限。`:`视频时长 ${props.duration.toFixed(2)} 秒，请选择视频范围内、不超过 ${limit} 秒的片段。`):`视频时长 ${props.duration.toFixed(2)} 秒，符合当前模式的 ${limit} 秒上限。`;
   useEffect(()=>{if(removedTask)undoRemoveButton.current?.focus();},[removedTask]);
 
   useEffect(()=>{
@@ -63,8 +65,12 @@ export default function useProcessing(props:Props) {
   },[historyPreview]);
 
   useEffect(()=>{
+    setClipEdited(false);
     setStart(0);setEnd(props.duration);
-  },[props.file,props.videoId,props.duration,props.mode]);
+  },[props.file,props.mode]);
+  useEffect(()=>{
+    if(!clipEdited){setStart(0);setEnd(props.duration);}
+  },[props.videoId,props.duration]);
   useEffect(()=>{if(message)setMessage("");},[props.file,props.duration,props.mode,props.prompt,props.points,start,end]);
   useEffect(()=>{props.onBusy(busy);},[busy,props.onBusy]);
   useEffect(()=>{
@@ -179,13 +185,23 @@ export default function useProcessing(props:Props) {
       setMessage("");
       if(!props.file&&!props.videoId)return;
       let videoId=props.videoId;
+      let clipEnd=end;
       if(!videoId&&props.file) {
         setUploadingTask({fileName:props.file.name,state:"uploading",progress:0,mode:props.mode,duration:props.duration,start,end,color:props.color});revealHistory();
-        try{videoId=(await uploadVideo(props.file,progress=>setUploadingTask(task=>task?{...task,progress}:task))).id;}
+        try{
+          const video=await uploadVideo(props.file,progress=>setUploadingTask(task=>task?{...task,progress}:task));
+          videoId=video.id;
+          // Browser playback duration can include a longer audio track. Use the probed video end
+          // for an untouched full-video selection; explicit clips still pass strict validation.
+          if(!clipEdited)clipEnd=video.meta.duration;
+          props.onVideoImported(video.id,video.meta);
+          setUploadingTask(task=>task?{...task,duration:video.meta.duration,end:clipEnd}:task);
+        }
         catch(error){setUploadingTask(task=>task?{...task,state:"failed",error:error instanceof Error?error.message:"上传失败"}:task);return;}
       }
       if(!videoId)return;
-      await submit({id:crypto.randomUUID(),videoId,mode:props.mode,prompt:props.prompt,points:props.points,start,end,reusable,color:props.color,resolution:"source"});
+      try{await submit({id:crypto.randomUUID(),videoId,mode:props.mode,prompt:props.prompt,points:props.points,start,end:clipEnd,reusable,color:props.color,resolution:"source"});}
+      catch(error){setUploadingTask(task=>task?{...task,state:"failed",error:error instanceof Error?error.message:"创建任务失败"}:task);throw error;}
     });
   }
   async function refreshHistory() {await action(async()=>{setHistory(await api<Job[]>("/api/jobs"));});}
@@ -223,10 +239,10 @@ export default function useProcessing(props:Props) {
       revealHistory();
     });
   }
-  const clip = props.file&&props.duration>limit ? (
+  const clip = props.file&&(props.duration>limit||clipEdited) ? (
     <fieldset className="processing-options" disabled={busy||!props.file}>
       <div className="group-title"><span className="section-label">选择处理片段</span><span className="default-hint">最多 {limit} 秒</span></div>
-      <div className="clip-inputs"><label>开始（秒）<input type="number" min={0} max={props.duration} step="0.01" value={start} onChange={e=>setStart(Number(e.target.value))}/></label><label>结束（秒）<input type="number" min={0} max={props.duration} step="0.01" value={end} onChange={e=>setEnd(Number(e.target.value))}/></label></div>
+      <div className="clip-inputs"><label>开始（秒）<input type="number" min={0} max={props.duration} step="0.01" value={start} onChange={e=>{setClipEdited(true);setStart(Number(e.target.value));}}/></label><label>结束（秒）<input type="number" min={0} max={props.duration} step="0.01" value={end} onChange={e=>{setClipEdited(true);setEnd(Number(e.target.value));}}/></label></div>
       <p className="helper">已选 {Math.max(0,end-start).toFixed(2)} 秒。超限时需调整范围，不会自动截断。</p>
     </fieldset>
   ) : null;
@@ -323,5 +339,5 @@ export default function useProcessing(props:Props) {
   </>;
 
   // One lifecycle owns polling and recovery; the workspace places each view in task order.
-  return {apiState,clip,durationStatus,durationOverLimit:!!props.file&&props.duration>limit&&!validClip,options,actions,result,history:historyView,hasCompletedJob,editingResult,sourceMeta:job?.sourceMeta};
+  return {apiState,clip,durationStatus,durationOverLimit:!!props.file&&(props.duration>limit||clipEdited)&&!validClip,options,actions,result,history:historyView,hasCompletedJob,editingResult,sourceMeta:job?.sourceMeta};
 }

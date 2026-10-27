@@ -7,7 +7,8 @@ export const ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f
 export type ColorName = typeof COLORS[number]["name"];
 // Legacy sizes remain readable for saved jobs/exports; new requests follow the source.
 export type Resolution = "source" | "2K" | "4K";
-export interface VideoMeta { width: number; height: number; duration: number; fps: number; hasAudio: boolean; codec: string; pixelFormat: string; frames: number; alpha: boolean }
+export const VIDEO_UPLOAD_TYPES:Record<string,string>={mp4:"video/mp4",mov:"video/quicktime",webm:"video/webm",avi:"video/x-msvideo"};
+export interface VideoMeta { width: number; height: number; duration: number; fps: number; hasAudio: boolean; codec: string; pixelFormat: string; frames: number; alpha: boolean; uploadMediaType?:string; containerDuration?:number }
 export interface VideoRecord { id: string; meta: VideoMeta; bytes: number; createdAt: string; filename?: string }
 export interface Point { x: number; y: number; type: PointType; atSeconds: number }
 export interface ExportOptions { color: ColorName; resolution: Resolution }

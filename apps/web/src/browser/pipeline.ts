@@ -54,7 +54,7 @@ function enqueue(key:string,work:()=>Promise<void>) {
 }
 async function upload(blob:Blob) {
   if(blob.size>MAX_BYTES)throw new AppError('UPLOAD_SIZE','预处理文件超过 1 GB，请裁短后重试。',413);
-  const {uploadId,chunkSize}=await cloud<{uploadId:string;chunkSize:number}>('/uploads',{size:blob.size});
+  const {uploadId,chunkSize}=await cloud<{uploadId:string;chunkSize:number}>('/uploads',{size:blob.size,mediaType:blob.type||'video/mp4'});
   if(chunkSize!==8*1024*1024)throw new AppError('CLOUD_RESPONSE','云端分片配置无效。',502);
   for(let start=0,part=1;start<blob.size;start+=chunkSize,part++) {
     await response(await fetch(`/browser/uploads/${uploadId}/parts/${part}`,{method:'PUT',headers:{'X-Cutout-Client':'1','Content-Type':'application/octet-stream'},body:blob.slice(start,start+chunkSize),redirect:'error',signal:AbortSignal.timeout(120000)}));
@@ -100,9 +100,18 @@ async function run(id:string) {
     if(!job.artifactReady) {
       if(await identify()!==job.owner)throw new AppError('ACCOUNT_MISMATCH','请使用创建此任务的账号登录。',403);
       if(!job.submissionAttempted) {
-        await state(job,'preparing');
         const video=await store.get<VideoRecord>('video/'+job.input.videoId),file=await store.get<Blob>('blob/video/'+video.id);
-        const prepared=await media.mediaSession(async()=>{
+        if(job.input.mode==='auto'&&job.input.start===0&&job.input.end===video.meta.duration&&video.meta.containerDuration===undefined) {
+          // Older local records lack upload metadata; probe once instead of forcing a transcode.
+          video.meta=await media.mediaSession(async()=>{await media.writeBlob('input',file);return media.probe('input');});
+          await store.put('video/'+video.id,video);
+        }
+        // Whole-video auto jobs retain the original bytes. Include the container duration so
+        // a longer audio track cannot turn a nominally valid selection into an over-limit upload.
+        const original=job.input.mode==='auto'&&job.input.start===0&&job.input.end===video.meta.duration&&
+          !!video.meta.uploadMediaType&&video.meta.containerDuration!==undefined&&Math.max(video.meta.duration,video.meta.containerDuration)<=60;
+        await state(job,original?'uploading':'preparing');
+        const prepared=original?{meta:video.meta,source:file,proxyMeta:video.meta,transfer:file.slice(0,file.size,video.meta.uploadMediaType)}:await media.mediaSession(async()=>{
           await media.writeBlob('input',file);const meta=await media.prepare('input','source.mp4',job.input,video.meta);
           const source=await media.readBlob('source.mp4');let proxyMeta=meta,transfer=source;
           if(job.input.mode!=='auto'){proxyMeta=await media.proxy('source.mp4','proxy.mp4');transfer=await media.readBlob('proxy.mp4');}

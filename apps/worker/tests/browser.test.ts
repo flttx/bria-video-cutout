@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 let mf:Miniflare,db:Awaited<ReturnType<Miniflare['getD1Database']>>,alice:string,bob:string,expired:string;
-let submitted=0,forwarded=0,submitCode=202,mediaRequests=0;
+let submitted=0,forwarded=0,submitCode=202,mediaRequests=0,lastMediaType='',lastMultipart='';
 before(async()=>{
   const keys=await generateKeyPair('RS256'),jwk={...await exportJWK(keys.publicKey),kid:'test-key',alg:'RS256',use:'sig'};
   const sign=(sub:string,expiration='1h')=>new SignJWT({sub}).setProtectedHeader({alg:'RS256',kid:'test-key'}).setIssuer('https://test-team.cloudflareaccess.com').setAudience('test-app').setIssuedAt().setExpirationTime(expiration).sign(keys.privateKey);
@@ -14,13 +14,13 @@ before(async()=>{
     const url=new URL(request.url);
     if(url.origin==='https://test-team.cloudflareaccess.com')return Response.json({keys:[jwk]});
     if(url.origin==='https://media.example.com') {
-      if(request.method==='POST'){const text=await request.text();assert.match(text,/name="policy"/);assert.match(text,/name="file"/);forwarded++;return new Response(null,{status:204});}
+      if(request.method==='POST'){const text=await request.text();lastMultipart=text;assert.match(text,/name="policy"/);assert.match(text,/name="file"/);forwarded++;return new Response(null,{status:204});}
       const range=/^bytes=(\d+)-$/.exec(request.headers.get('range')??'');mediaRequests++;
       if(range){const start=Number(range[1]);if(start>=12)return new Response(null,{status:416});return new Response('result-video'.slice(start),{status:206,headers:{'Content-Length':String(12-start),'Content-Range':`bytes ${start}-11/12`}});}
       return new Response('result-video',{headers:{'Content-Length':'12'}});
     }
     assert.equal(url.origin,'https://engine.prod.bria-api.com','All upstream traffic must be mocked');
-    if(url.pathname==='/v2/video/upload')return Response.json({result:{upload_url:'https://media.example.com/upload?private=secret',upload_fields:{key:'source.mp4',policy:'secret-policy'},file_url:'https://media.example.com/source?private=secret'}});
+    if(url.pathname==='/v2/video/upload'){lastMediaType=(await request.json() as {media_type:string}).media_type;return Response.json({result:{upload_url:'https://media.example.com/upload?private=secret',upload_fields:{key:'source.mp4',policy:'secret-policy'},file_url:'https://media.example.com/source?private=secret'}});}
     if(url.pathname.startsWith('/v2/status/'))return Response.json({status:'COMPLETED',result:{mask_url:'https://media.example.com/mask?private=secret',video_url:'https://media.example.com/video?private=secret'}});
     submitted++;if(submitCode!==202)return new Response('private-body',{status:submitCode});
     return Response.json({request_id:'request-test-1234'},{status:202});
@@ -33,6 +33,19 @@ function call(path:string,body?:unknown,token=alice,method=body===undefined?'GET
   const raw=body instanceof Uint8Array?body:body===undefined?undefined:JSON.stringify(body);
   return mf.dispatchFetch('https://app.example'+path,{method,headers:{'cf-access-jwt-assertion':token,'Origin':'https://app.example','X-Cutout-Client':'1','Content-Type':body instanceof Uint8Array?'application/octet-stream':'application/json',...extra},body:raw});
 }
+test('original video MIME survives R2 multipart and Bria upload grant; unsupported types are rejected',async()=>{
+  const before=submitted;
+  for(const [extension,mediaType] of [['mp4','video/mp4'],['mov','video/quicktime'],['webm','video/webm'],['avi','video/x-msvideo']]) {
+    const created=await call('/browser/uploads',{size:16,mediaType});assert.equal(created.status,201);
+    const {uploadId}=await created.json() as {uploadId:string};
+    assert.equal((await call(`/browser/uploads/${uploadId}/parts/1`,new Uint8Array(16),alice,'PUT',{'Content-Length':'16'})).status,200);
+    assert.equal((await call(`/browser/uploads/${uploadId}/complete`,{})).status,200);
+    assert.equal(lastMediaType,mediaType);
+    assert.ok(lastMultipart.includes(`filename="video.${extension}"\r\nContent-Type: ${mediaType}\r\n`));
+  }
+  for(const mediaType of ['text/html','video/mp4\r\nInjected: yes',42])assert.equal((await call('/browser/uploads',{size:16,mediaType})).status,415);
+  assert.equal(submitted,before,'Uploading never creates a paid processing job');
+});
 async function upload() {
   const created=await call('/browser/uploads',{size:16});assert.equal(created.status,201);
   const {uploadId}=await created.json() as {uploadId:string};
@@ -54,7 +67,7 @@ test('browser API validates Access signatures, expiration and same-origin writes
   const response=await call('/browser/health');assert.equal(response.status,200);assert.equal((await response.json() as {processingReady:boolean}).processingReady,true);
 });
 test('multipart transfer is owned, complete and streaming; job dedupe and result downloads never expose signed URLs',async()=>{
-  const uploadId=await upload();assert.equal(forwarded,1);
+  const beforeForwarded=forwarded,uploadId=await upload();assert.equal(forwarded,beforeForwarded+1);
   const input={cloudJobId:randomUUID(),uploadId,mode:'prompt',prompt:'person',meta:{width:320,height:180,duration:1,fps:24,frames:24}};
   assert.equal((await call('/browser/jobs',input,bob)).status,404);
   const responses=await Promise.all([call('/browser/jobs',input),call('/browser/jobs',input)]);

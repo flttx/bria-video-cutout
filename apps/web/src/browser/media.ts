@@ -1,6 +1,7 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { AppError } from '../../../api/src/errors.js';
 import { COLORS } from '../../../api/src/config.js';
+import { VIDEO_UPLOAD_TYPES } from '../../../api/src/model.js';
 import type { ExportOptions, ExportRecord, JobInput, VideoMeta } from '../../../api/src/model.js';
 let engine:FFmpeg;
 let tail:Promise<unknown>=Promise.resolve();
@@ -84,7 +85,8 @@ export async function probe(file:string,count=false,trustedArtifact=false):Promi
   if(rotation===90) [width,height]=[height,width];
   if(width>16000 || height>16000 || width<2 || height<2) throw new AppError("VIDEO_DIMENSIONS","视频尺寸不在支持范围内。",422);
   const hasAlphaTag=Object.entries(v.tags??{}).some(([key,value])=>key.toLowerCase()==="alpha_mode"&&value==="1");
-  return {width,height,duration,fps,hasAudio:!!info.streams?.some(s=>s.codec_type==="audio"),codec:v.codec_name??"",pixelFormat:v.pix_fmt??"",frames:Number(v.nb_read_frames??v.nb_frames)||Math.round(duration*fps),alpha:hasAlphaTag || /^yuva|rgba|bgra|argb|abgr|gbrap/.test(v.pix_fmt??"")};
+  const containerDuration=Number(info.format?.duration);
+  return {width,height,duration,fps,hasAudio:!!info.streams?.some(s=>s.codec_type==="audio"),codec:v.codec_name??"",pixelFormat:v.pix_fmt??"",frames:Number(v.nb_read_frames??v.nb_frames)||Math.round(duration*fps),alpha:hasAlphaTag || /^yuva|rgba|bgra|argb|abgr|gbrap/.test(v.pix_fmt??""),uploadMediaType:VIDEO_UPLOAD_TYPES[container],containerDuration:Number.isFinite(containerDuration)&&containerDuration>0?containerDuration:undefined};
 }
 export async function compatiblePreview(source:string,output:string,meta:VideoMeta):Promise<void> {
   const temp=output+".part.mp4";
@@ -123,8 +125,8 @@ export async function validateArtifact(file:string,source:VideoMeta,kind:"mask"|
   return meta;
 }
 export async function render(source:string,artifact:string,kind:"mask"|"alpha"|"direct",output:string,options:ExportOptions,sourceMeta:VideoMeta):Promise<{meta:VideoMeta;bytes:number;route:ExportRecord["route"]}> {
-  const width=options.resolution==="source"?sourceMeta.width:options.resolution==="4K"?3840:2560;
-  const height=options.resolution==="source"?sourceMeta.height:options.resolution==="4K"?2160:1440;
+  const width=options.resolution==="source"?Math.ceil(sourceMeta.width/2)*2:options.resolution==="4K"?3840:2560;
+  const height=options.resolution==="source"?Math.ceil(sourceMeta.height/2)*2:options.resolution==="4K"?2160:1440;
   const color=COLORS.find(c=>c.name===options.color)!.hex.replace("#","0x");
   const artifactMeta=await probe(artifact,false,true);
   const temp=output+".part.mp4";

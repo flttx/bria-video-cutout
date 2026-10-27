@@ -27,7 +27,7 @@ Token 模式：GET /auth/token 提供不含凭据的入口页，读取并移除 
 | 接口 | 请求与返回 |
 | --- | --- |
 | GET /browser/health | ok、userId（不含个人信息的归属标识）、tokenConfigured、processingReady；不返回邮箱、Token 或签名 URL |
-| POST /browser/uploads | JSON {size}；返回 uploadId、chunkSize=8388608；创建私有 R2 multipart 暂存 |
+| POST /browser/uploads | JSON {size, mediaType?}；mediaType 仅允许 video/mp4、video/quicktime、video/webm、video/x-msvideo，省略按 video/mp4 兼容旧客户端；返回 uploadId、chunkSize=8388608；创建私有 R2 multipart 暂存，MIME 随 R2 元数据传递至 Bria 上传授权及文件表单 |
 | PUT /browser/uploads/:id/parts/:number | application/octet-stream；Content-Length 与预期分片长度一致；最后一片可以更小；返回 ok |
 | POST /browser/uploads/:id/complete | 所有分片齐全后锁定转交，R2 complete → Worker 流式 Bria multipart；返回 uploadId，不返回上传表单与地址 |
 | POST /browser/jobs | 沿用 CloudJobInput：cloudJobId、uploadId、mode、meta，以及相应模式参数；同 ID 去重 |

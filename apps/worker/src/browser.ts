@@ -1,5 +1,5 @@
 import { AppError, object } from '../../api/src/errors.js';
-import { validId, MAX_BYTES } from '../../api/src/model.js';
+import { validId, MAX_BYTES, VIDEO_UPLOAD_TYPES } from '../../api/src/model.js';
 import { BriaHttpClient, mediaUrl } from '../../api/src/bria/protocol.js';
 import type { BriaStatusResponse } from '../../api/src/bria/protocol.js';
 import { parseCloudInput } from '../../api/src/bria/cloud-contract.js';
@@ -74,13 +74,16 @@ async function artifact(request:Request,id:string,url:string,env:BrowserEnv,ctx?
 async function forwardUpload(row:Upload,env:BrowserEnv,bria:BriaHttpClient) {
   const stored=await env.STAGING.get('uploads/'+row.id);
   if(!stored||stored.size!==row.size)throw new AppError('UPLOAD_INCOMPLETE','上传文件尚不完整。',409);
-  const grant=await bria.uploadGrant(),boundary='cutout-'+crypto.randomUUID();
+  const mediaType=stored.httpMetadata?.contentType??'video/mp4';
+  const extension=Object.keys(VIDEO_UPLOAD_TYPES).find(key=>VIDEO_UPLOAD_TYPES[key]===mediaType);
+  if(!extension)throw new AppError('UPLOAD_TYPE','不支持此上传格式。',415);
+  const grant=await bria.uploadGrant(mediaType),boundary='cutout-'+crypto.randomUUID();
   const encoder=new TextEncoder();let fields='';
   for(const [key,value] of Object.entries(grant.upload_fields)) {
     if(!/^[a-zA-Z0-9_-]+$/.test(key))throw new AppError('BRIA_UPLOAD_RESPONSE','上游上传字段无效。',502);
     fields+=`--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`;
   }
-  const prefix=encoder.encode(fields+`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`);
+  const prefix=encoder.encode(fields+`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="video.${extension}"\r\nContent-Type: ${mediaType}\r\n\r\n`);
   const suffix=encoder.encode(`\r\n--${boundary}--\r\n`);
   const stream=new FixedLengthStream(prefix.byteLength+stored.size+suffix.byteLength),writer=stream.writable.getWriter();
   const pumping=(async()=>{try{await writer.write(prefix);const reader=stored.body.getReader();try{while(true){const part=await reader.read();if(part.done)break;await writer.write(part.value);}}finally{reader.releaseLock();}await writer.write(suffix);await writer.close();}catch(error){await writer.abort(error).catch(()=>{});throw error;}})();
@@ -134,7 +137,9 @@ export async function browserFetch(request:Request,env:BrowserEnv,ctx?:Execution
     if(path==='/browser/uploads'&&request.method==='POST') {
       const input=object(await body(request));
       if(!Number.isInteger(input.size)||Number(input.size)<1||Number(input.size)>MAX_BYTES)throw new AppError('UPLOAD_SIZE','视频须大于 0 字节且不超过 1 GB。',413);
-      const id=crypto.randomUUID(),now=Date.now(),upload=await env.STAGING.createMultipartUpload('uploads/'+id,{httpMetadata:{contentType:'video/mp4'}});
+      const mediaType=input.mediaType??'video/mp4';
+      if(typeof mediaType!=='string'||!Object.values(VIDEO_UPLOAD_TYPES).includes(mediaType))throw new AppError('UPLOAD_TYPE','不支持此上传格式。',415);
+      const id=crypto.randomUUID(),now=Date.now(),upload=await env.STAGING.createMultipartUpload('uploads/'+id,{httpMetadata:{contentType:mediaType}});
       try{await env.DB.prepare('INSERT INTO browser_uploads(id,owner,size,multipart_id,created_at,expires_at,device_id) VALUES(?,?,?,?,?,?,?)').bind(id,owner,input.size,upload.uploadId,now,now+86400000,device).run();}catch(error){await upload.abort();throw error;}
       return json({uploadId:id,chunkSize:CHUNK},201);
     }

@@ -63,8 +63,8 @@ export class BriaHttpClient {
     if(typeof data.request_id!=="string" || !/^[a-zA-Z0-9_-]{4,160}$/.test(data.request_id)) throw new AppError("BRIA_RESPONSE","Bria 提交结果缺少有效任务标识，请勿直接重复提交。",502);
     return {request_id:data.request_id};
   }
-  async uploadGrant():Promise<UploadGrant> {
-    const data=object(await this.api("/video/upload",{media_type:"video/mp4"}));
+  async uploadGrant(mediaType="video/mp4"):Promise<UploadGrant> {
+    const data=object(await this.api("/video/upload",{media_type:mediaType}));
     const result=object(data.result??data);
     const upload_url=mediaUrl(result.upload_url).href,file_url=mediaUrl(result.file_url).href;
     const upload_fields:Record<string,string>={};

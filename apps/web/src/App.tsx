@@ -77,7 +77,8 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [stageSize, setStageSize] = useState({ width: 1, height: 1 });
-  const flow = useProcessing({file:videoFile,videoId:uploadedVideoId,videoReady:!compatiblePreview||!!uploadedVideoId&&!preparingPreview,duration:meta?.duration??0,mode,prompt,points:marks,color:selectedColor,onBusy:setProcessing,onResultSettled:showResult,view:preview,onEditSource:showSource,colorLabel});
+  const onVideoImported=useCallback((id:string,probedMeta:Meta)=>{setUploadedVideoId(id);setMeta(probedMeta);},[]);
+  const flow = useProcessing({file:videoFile,videoId:uploadedVideoId,videoReady:!compatiblePreview||!!uploadedVideoId&&!preparingPreview,duration:meta?.duration??0,mode,prompt,points:marks,color:selectedColor,onBusy:setProcessing,onVideoImported,onResultSettled:showResult,view:preview,onEditSource:showSource,colorLabel});
   const apiState = flow.apiState;
   const exportMeta = flow.editingResult ? flow.sourceMeta : meta;
 
@@ -253,7 +254,7 @@ export default function App() {
 
   function onMetadata() {
     const video = videoRef.current;
-    if (!video || previewUrl) return;
+    if (!video || previewUrl || uploadedVideoId) return;
     setMeta({ width: video.videoWidth, height: video.videoHeight, duration: video.duration });
   }
 

@@ -8,6 +8,7 @@
 - D1 保存云端任务、归属、上传引用和去重记录。
 - R2 私有临时桶接收 8 MiB 分片；Worker 流式转交给 Bria，成功后删除临时文件。异常遗留文件通过桶生命周期清理。
 - FFmpeg WebAssembly 在浏览器运行。素材、任务、Alpha／Mask 和成片保存在当前浏览器的 IndexedDB，预览／下载使用本机 Blob URL。
+- 自动模式整段 MP4／MOV／WebM／AVI 通过格式、编码及时长检查后原文件直传；裁选、文字／点选代理及 GIF 兼容处理仍按需编码。首次导入仍需读取元数据，换背景和最终导出仍可能进行本地合成／编码。
 - 页面关闭后本地计算停止；重新打开同一站点、同一浏览器，可从保存阶段恢复。已尝试提交的任务仅查询原云端 ID，不自动重新付费提交。
 
 生产配置、访问链接生成及发布记录：[docs/CLOUD.md](docs/CLOUD.md)。
@@ -31,6 +32,8 @@ npm run db:local -w apps/worker
 ```
 
 仅在不存在时，将 `apps/worker/config.template` 复制为 `apps/worker/.dev.vars`，填入开发环境变量。`DEV_AUTH=1` 仅对回环地址生效，公网请求仍要求有效会话（或所选 Access 模式的 JWT）；真实 Bria Token 会导致实际请求计费。
+
+Worker 开发脚本显式使用 `--local-upstream 127.0.0.1`，避免 Wrangler 从生产路由推导请求域名、导致本地免登录不生效。若 5174 已被其他项目占用，可用 `npm run dev -w apps/web -- --port 5175` 启动前端，再访问 `http://127.0.0.1:5175/`。
 
 ```powershell
 # 终端 1：本地模拟 Worker、D1、R2

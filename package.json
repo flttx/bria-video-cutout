@@ -15,7 +15,8 @@
     "test:worker": "npm run build -w apps/web && npm run build -w apps/worker && node --import tsx --test apps/worker/tests/*.test.ts",
     "dev:worker": "npm run dev -w apps/worker",
     "prepare:wasm": "node scripts/prepare-wasm.mjs",
-    "test:browser": "npm run prepare:wasm && node --import tsx tests/browser.integration.mjs"
+    "test:browser": "npm run prepare:wasm && node --import tsx tests/browser.integration.mjs",
+    "test:browser:duration": "npm run prepare:wasm && node --import tsx tests/browser-duration.integration.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
