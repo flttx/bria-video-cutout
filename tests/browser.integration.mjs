@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {chromium} from 'playwright';
 import {createServer,preview as createPreview} from 'vite';
 import {command} from '../apps/api/src/media.ts';
+import {createNativeServer} from '../apps/api/src/native.ts';
 const root=resolve('.tmp/browser-tests',randomUUID());await mkdir(root,{recursive:true});
 const source=resolve(root,'source.mp4'),mask=resolve(root,'mask.mp4'),alpha=resolve(root,'alpha.webm');
 await command('ffmpeg',['-y','-f','lavfi','-i','color=c=blue:s=320x180:r=24:d=1','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=1','-vf','drawbox=x=100:y=30:w=100:h=120:color=red:t=fill','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',source]);
@@ -24,13 +25,24 @@ const large={source4k:await readFile(source4k),mask4k:await readFile(mask4k)};
 const oddPath=resolve(root,'odd.mp4');
 await command('ffmpeg',['-y','-f','lavfi','-i','color=c=red:s=162x122:r=20:d=0.2','-vf','format=yuv444p,crop=161:121','-c:v','libx264','-pix_fmt','yuv444p',oddPath]);
 const odd=await readFile(oddPath);
-const server=await createServer({configFile:resolve('apps/web/vite.config.ts'),root:resolve('apps/web'),server:{host:'127.0.0.1',port:5184,strictPort:true}});await server.listen();
+const rotatedBase=resolve(root,'rotated-base.mp4'),rotatedAlphaPath=resolve(root,'rotated-alpha.webm'),rotatedDirectPath=resolve(root,'rotated-direct.mp4');
+await command('ffmpeg',['-y','-f','lavfi','-i','color=c=blue:s=160x120:r=1498/25','-vf','drawbox=x=0:y=0:w=80:h=120:color=red:t=fill','-frames:v','66','-c:v','libx264','-pix_fmt','yuv420p',rotatedBase]);
+for(const rotation of [90,270]) {
+  const path=resolve(root,'rotate'+rotation+'.mp4');
+  await command('ffmpeg',['-y','-display_rotation',String(rotation),'-i',rotatedBase,'-c','copy',path]);formats['rotate'+rotation]=await readFile(path);
+}
+await command('ffmpeg',['-y','-f','lavfi','-i','color=c=blue:s=160x120:r=60','-vf','drawbox=x=0:y=0:w=80:h=120:color=red:t=fill,format=rgba,colorkey=blue:0.1:0.0','-frames:v','66','-c:v','libvpx-vp9','-pix_fmt','yuva420p','-auto-alt-ref','0',rotatedAlphaPath]);
+await command('ffmpeg',['-y','-f','lavfi','-i','color=c=white:s=160x120:r=60','-vf','drawbox=x=0:y=0:w=80:h=120:color=red:t=fill','-frames:v','66','-c:v','libx264','-pix_fmt','yuv420p',rotatedDirectPath]);
+const rotatedAlpha=await readFile(rotatedAlphaPath),rotatedDirect=await readFile(rotatedDirectPath);
+const native=process.env.BROWSER_NATIVE_ONLY||process.argv.includes('--native')?await createNativeServer(resolve(root,'native'),'http://127.0.0.1:5184'):undefined;
+const nativeAddress=native?await native.listen({host:'127.0.0.1',port:0}):undefined;
+const server=await createServer({configFile:resolve('apps/web/vite.config.ts'),root:resolve('apps/web'),mode:native?'native':'development',server:{host:'127.0.0.1',port:5184,strictPort:true,...(nativeAddress?{proxy:{'/native':{target:nativeAddress,changeOrigin:true}}}:{})}});await server.listen();
 let executablePath=process.env.BROWSER_TEST_EXECUTABLE;
 if(!executablePath&&process.platform==='win32')for(const candidate of ['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe']){try{await access(candidate);executablePath=candidate;break;}catch{}}
 const browser=await chromium.launch({headless:true,executablePath});
 let production;
 const context=await browser.newContext({viewport:{width:1440,height:1000}});
-const jobs=new Map(),uploads=new Map();let submissions=0,loseNext=false,holdNext=false,cloudOffline=false,localApiRequests=0,wasmLoads=0;
+const jobs=new Map(),uploads=new Map();let submissions=0,loseNext=false,holdNext=false,cloudOffline=false,localApiRequests=0,wasmLoads=0,nativeRenders=0,interruptNative=false;
 await context.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());
   if(url.hostname!=='127.0.0.1')return route.fulfill({status:200,body:'',contentType:'text/css'});
@@ -39,8 +51,10 @@ await context.route('**/*',async route=>{
   if(url.pathname==='/fixture/source4k')return route.fulfill({body:large.source4k,contentType:'video/mp4'});
   if(url.pathname==='/fixture/mask4k')return route.fulfill({body:large.mask4k,contentType:'video/mp4'});
   if(url.pathname==='/fixture/odd')return route.fulfill({body:odd,contentType:'video/mp4'});
+  if(url.pathname==='/fixture/rounded-alpha')return route.fulfill({body:rotatedAlpha,contentType:'video/webm'});
   if(formats[url.pathname.slice('/fixture/'.length)]&&url.pathname.startsWith('/fixture/'))return route.fulfill({body:formats[url.pathname.slice('/fixture/'.length)],contentType:'application/octet-stream'});
   if(url.pathname==='/ffmpeg/manifest.json')wasmLoads++;
+  if(url.pathname==='/native/render'){nativeRenders++;if(interruptNative){interruptNative=false;return route.abort();}}
   if(!url.pathname.startsWith('/browser/'))return route.continue();
   const reply=(data,status=200)=>route.fulfill({status,json:data});
   if(cloudOffline)return route.abort();
@@ -54,7 +68,7 @@ await context.route('**/*',async route=>{
     if(loseNext){loseNext=false;return route.abort();}return reply({id:data.cloudJobId,state:'processing'});
   }
   const id=url.pathname.split('/')[3],job=jobs.get(id);assert.ok(job,'Unknown cloud job');
-  if(url.pathname.endsWith('/artifact'))return route.fulfill({body:job.mode!=='auto'?fixtures.mask:job.color?fixtures.source:fixtures.alpha,contentType:'application/octet-stream'});
+  if(url.pathname.endsWith('/artifact'))return route.fulfill({body:job.meta.frames===66?(job.color?rotatedDirect:rotatedAlpha):job.mode!=='auto'?fixtures.mask:job.color?fixtures.source:fixtures.alpha,contentType:'application/octet-stream'});
   return reply({id,state:job.failed?'failed':job.hold?'processing':'completed',resultAvailable:!job.hold});
 });
 const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -64,7 +78,7 @@ async function start(mode='auto',extra={},fixture='source',metaPatch=null) {
     const file=new File([await (await fetch('/fixture/'+fixture)).blob()],'sample.mp4',{type:'video/mp4'});
     const video=await importVideo(file),id=crypto.randomUUID();
     if(metaPatch){Object.assign(video.meta,metaPatch);await (await import('/src/browser/store.ts')).put('video/'+video.id,video);}
-    const input={id,videoId:video.id,mode,prompt:mode==='prompt'?'red rectangle':'',points:mode==='points'?[{x:.5,y:.5,type:'positive',atSeconds:.5}]:[],start:0,end:1,reusable:true,color:'White',resolution:'source',...extra};
+    const input={id,videoId:video.id,mode,prompt:mode==='prompt'?'red rectangle':'',points:mode==='points'?[{x:.5,y:.5,type:'positive',atSeconds:.5}]:[],start:0,end:video.meta.duration,reusable:true,color:'White',resolution:'source',...extra};
     await browserApi('/api/jobs',input);return id;
   },{mode,extra,fixture,metaPatch});
 }
@@ -80,6 +94,7 @@ async function waitJob(id,state='completed') {
 try {
   await page.goto('http://127.0.0.1:5184');
   await page.evaluate(()=>{for(const mode of ['auto','prompt','points'])localStorage.setItem('bria-cutout.guide.'+mode+'.v1','1');});await page.reload();
+  if(!process.env.BROWSER_ALIGNMENT_ONLY) {
   assert.equal(await page.evaluate(async()=>{
     const {importVideo}=await import('/src/browser/pipeline.ts');
     try{await importVideo(new File(['invalid video'],'broken.mp4',{type:'video/mp4'}));return false;}catch{return true;}
@@ -105,7 +120,7 @@ try {
     const before=submissions;cloudOffline=true;
     const exportId=await page.evaluate(async id=>{const {browserApi}=await import('/src/browser/pipeline.ts');const result=await browserApi('/api/jobs/'+id+'/export',{id:crypto.randomUUID(),color:'Blue',resolution:'source'});return result.id;},id);
     await waitForBrowser(async id=>{const {browserApi}=await import('/src/browser/pipeline.ts');const e=await browserApi('/api/exports/'+id);if(e.state==='failed')throw new Error(JSON.stringify(e.error));return e.state==='completed';},exportId,{timeout:120000});
-    cloudOffline=false;assert.equal(submissions,before);console.log(mode+': real WASM probe, prepare, composite, audio, frames, playable MP4 and offline recolor passed');
+    cloudOffline=false;assert.equal(submissions,before);console.log(mode+': real '+(native?'native FFmpeg':'WASM')+' composite, audio, frames, playable MP4 and offline recolor passed');
   }
   const direct=await start('auto',{reusable:false});assert.equal((await waitJob(direct)).reusable,false);
   loseNext=true;const lost=await start('prompt');await waitJob(lost,'failed');const before=submissions;
@@ -150,8 +165,10 @@ try {
   await built.getByRole('link',{name:'下载 MP4',exact:true}).waitFor({timeout:120000});
   await built.locator('video[aria-label="导出成品预览"]').evaluate(async video=>{await video.play();await new Promise(resolve=>setTimeout(resolve,250));video.pause();});
   const builtDownload=built.waitForEvent('download');await built.getByRole('link',{name:'下载 MP4',exact:true}).click();
-  assert.equal((await builtDownload).suggestedFilename(),'cutout.mp4');
+  const downloaded=await builtDownload;assert.equal(downloaded.suggestedFilename(),'cutout.mp4');
+  await downloaded.saveAs(resolve(root,'production-result.mp4'));
   await built.screenshot({path:resolve(root,'production-result.png'),fullPage:true});
+  await built.close();
   assert.equal(localApiRequests,0);console.log('Production build: UI file selection → real WASM → mocked cloud → playable downloadable MP4 passed.');
   holdNext=true;const clipped=await start('auto',{start:.25,end:.75});const clippedJob=await waitJob(clipped,'processing');
   const clippedCloud=jobs.get(clippedJob.cloudJobId),clippedUpload=uploads.get(clippedCloud.uploadId);
@@ -183,9 +200,69 @@ try {
   });
   assert.equal(oddExport.source,161);assert.equal(oddExport.output.width,162);assert.equal(oddExport.output.height,122);assert.equal(oddExport.output.frames,4);
   console.log('Unnormalized odd-size original is padded only at final H.264 export; frame QA passed.');
+  }
+  for(const [rotation,reusable] of [[90,true],[270,true],[90,false]]) {
+    console.log('Checking rotation '+rotation+', reusable='+reusable);
+    const id=await start('auto',{reusable},'rotate'+rotation),job=await waitJob(id),meta=job.latestExport.meta;
+    assert.equal(meta.width,120);assert.equal(meta.height,160);assert.equal(meta.frames,66);assert.ok(Math.abs(meta.fps-59.92)<.001);
+    const uploaded=uploads.get(jobs.get(job.cloudJobId).uploadId);assert.deepEqual(Buffer.concat(uploaded.parts),formats['rotate'+rotation]);
+    const pixels=await page.evaluate(async url=>{
+      const video=document.createElement('video');video.muted=true;video.preload='auto';
+      await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Frame decode timeout')),10000);video.onloadeddata=()=>{clearTimeout(timer);resolve();};video.onerror=()=>{clearTimeout(timer);reject(new Error('Frame decode failed'));};video.src=url;video.load();});
+      const canvas=document.createElement('canvas');canvas.width=120;canvas.height=160;const ctx=canvas.getContext('2d');ctx.drawImage(video,0,0);
+      const pixels={top:[...ctx.getImageData(60,20,1,1).data],bottom:[...ctx.getImageData(60,140,1,1).data]};
+      video.removeAttribute('src');video.load();return pixels;
+    },job.latestExport.downloadUrl);
+    const red=rotation===90?pixels.bottom:pixels.top,white=rotation===90?pixels.top:pixels.bottom;
+    assert.ok(red[0]>180&&red[1]<60&&red[2]<60,'Rotation must follow the original signed display matrix: '+JSON.stringify({rotation,reusable,pixels,sourceRotation:job.sourceMeta.rotation}));
+    assert.ok(white.slice(0,3).every(value=>value>180),'Transparent region must be composited after rotation');
+  }
+  console.log('Raw rotated auto inputs: 59.92→60 FPS result rounding, both quarter-turn directions, Alpha/direct exports and pixel orientation passed.');
+  const rejected=await page.evaluate(async()=>{
+    const media=await import('/src/browser/media.ts');
+    return media.mediaSession(async()=>{
+      await media.writeBlob('original',await (await fetch('/fixture/rotate90')).blob());
+      await media.writeBlob('artifact',await (await fetch('/fixture/rounded-alpha')).blob());
+      const source=await media.probe('original'),codes=[];
+      for(const patch of [{frames:source.frames+3},{fps:55},{rotation:0},{width:200},{rotation:180,width:160,height:120}]) {
+        try{await media.validateArtifact('artifact',{...source,...patch},'alpha');codes.push('accepted');}catch(error){codes.push(error.code);}
+      }
+      return codes;
+    });
+  });
+  assert.deepEqual(rejected,['RESULT_ALIGNMENT','RESULT_ALIGNMENT','RESULT_ASPECT','RESULT_ASPECT','RESULT_ORIENTATION']);
+  holdNext=true;const recoveryId=await start('auto',{},'rotate90'),oldJob=await waitJob(recoveryId,'processing'),beforeRecovery=submissions;
+  await page.evaluate(async id=>{
+    const store=await import('/src/browser/store.ts'),job=await store.get('job/'+id);
+    delete job.sourceMeta.rotation;delete job.sourceMeta.codedWidth;delete job.sourceMeta.codedHeight;
+    job.state='failed';job.canResume=true;job.error={code:'RESULT_ALIGNMENT',message:'old version validation'};await store.put('job/'+id,job);
+  },recoveryId);
+  await page.reload();jobs.get(oldJob.cloudJobId).hold=false;
+  await page.evaluate(async id=>{const {browserApi}=await import('/src/browser/pipeline.ts');await browserApi('/api/jobs/'+id+'/resume',{});},recoveryId);
+  const recovered=await waitJob(recoveryId);
+  assert.equal(submissions,beforeRecovery);assert.equal(recovered.latestExport.meta.width,120);if(!native)assert.equal(recovered.sourceMeta.rotation,90);
+  console.log('Missing-frame/rate/aspect rejection and old failed-result recovery without another cloud submission passed.');
+  if(native){
+    const rejected=await page.evaluate(async()=>{
+      const {nativeRender}=await import('/src/browser/native.ts');
+      try{await nativeRender(await(await fetch('/fixture/source')).blob(),await(await fetch('/fixture/rounded-alpha')).blob(),'alpha',{color:'White',resolution:'source'});return 'accepted';}
+      catch(error){return error.code;}
+    });assert.equal(rejected,'RESULT_ALIGNMENT','Native service must reject mismatched results before exporting');
+    const beforeLoads=wasmLoads;interruptNative=true;
+    const id=await start('auto',{},'rotate90');await waitJob(id,'failed');const before=submissions;
+    await page.evaluate(async id=>{const {browserApi}=await import('/src/browser/pipeline.ts');await browserApi('/api/jobs/'+id+'/resume',{});},id);
+    await waitJob(id);assert.equal(submissions,before);assert.equal(wasmLoads-beforeLoads,1,'Native export/recovery must not load WASM; only source import probes in WASM');
+    assert.ok(nativeRenders>=5);console.log('Native interruption recovery reused cached artifacts with zero additional Bria submissions or export WASM loads.');
+  }
   for(const job of jobs.values())if(job.hold)job.failed=true;
   await waitForBrowser(async()=>{
     const store=await import('/src/browser/store.ts');
     return (await store.list('job/')).every(job=>['completed','failed'].includes(job.state));
   });
-} finally {await browser.close();await server.close();if(production)await new Promise(resolve=>production.httpServer.close(resolve));}
+  console.log('All browser tasks reached terminal states.');
+} finally {
+  await context.close();await browser.close();await server.close();
+  if(production)await new Promise(resolve=>production.httpServer.close(resolve));
+  if(native)await native.close();
+  console.log('Browser test cleanup completed.');
+}

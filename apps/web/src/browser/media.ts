@@ -81,12 +81,12 @@ export async function probe(file:string,count=false,trustedArtifact=false):Promi
   }
   const sar=rate(v.sample_aspect_ratio?.replace(":","/")??"1/1")||1;
   let width=Math.round(v.width*sar),height=v.height;
-  const rotation=Math.abs(v.side_data_list?.find(x=>x.rotation!==undefined)?.rotation??0)%180;
-  if(rotation===90) [width,height]=[height,width];
+  const rotation=v.side_data_list?.find(x=>x.rotation!==undefined)?.rotation??0;
+  if(Math.abs(rotation)%180===90) [width,height]=[height,width];
   if(width>16000 || height>16000 || width<2 || height<2) throw new AppError("VIDEO_DIMENSIONS","视频尺寸不在支持范围内。",422);
   const hasAlphaTag=Object.entries(v.tags??{}).some(([key,value])=>key.toLowerCase()==="alpha_mode"&&value==="1");
   const containerDuration=Number(info.format?.duration);
-  return {width,height,duration,fps,hasAudio:!!info.streams?.some(s=>s.codec_type==="audio"),codec:v.codec_name??"",pixelFormat:v.pix_fmt??"",frames:Number(v.nb_read_frames??v.nb_frames)||Math.round(duration*fps),alpha:hasAlphaTag || /^yuva|rgba|bgra|argb|abgr|gbrap/.test(v.pix_fmt??""),uploadMediaType:VIDEO_UPLOAD_TYPES[container],containerDuration:Number.isFinite(containerDuration)&&containerDuration>0?containerDuration:undefined};
+  return {width,height,duration,fps,hasAudio:!!info.streams?.some(s=>s.codec_type==="audio"),codec:v.codec_name??"",pixelFormat:v.pix_fmt??"",frames:Number(v.nb_read_frames??v.nb_frames)||Math.round(duration*fps),alpha:hasAlphaTag || /^yuva|rgba|bgra|argb|abgr|gbrap/.test(v.pix_fmt??""),uploadMediaType:VIDEO_UPLOAD_TYPES[container],containerDuration:Number.isFinite(containerDuration)&&containerDuration>0?containerDuration:undefined,rotation,codedWidth:v.width,codedHeight:v.height};
 }
 export async function compatiblePreview(source:string,output:string,meta:VideoMeta):Promise<void> {
   const temp=output+".part.mp4";
@@ -114,10 +114,22 @@ export async function proxy(source:string,output:string):Promise<VideoMeta> {
   await ffmpeg([...input(source),"-map","0:v:0","-an","-vf","scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1","-c:v","libx264","-threads","2","-preset","fast","-crf","18","-pix_fmt","yuv420p",output]);
   return probe(output,true);
 }
+function artifactRotation(meta:VideoMeta,source:VideoMeta):number {
+  const rotation=((source.rotation??0)%360+360)%360;
+  // Correct only an unrotated result matching the original coded geometry. A result already
+  // in display orientation must not be rotated again; unknown geometry still fails validation.
+  return (rotation===90||rotation===270)&&!meta.rotation&&meta.width===source.codedWidth&&meta.height===source.codedHeight&&Math.abs(meta.width/meta.height-source.width/source.height)>.02?rotation:0;
+}
 export async function validateArtifact(file:string,source:VideoMeta,kind:"mask"|"alpha"|"direct"):Promise<VideoMeta> {
   const meta=await probe(file,true,true);
-  if(Math.abs(meta.duration-source.duration)>Math.max(.15,2/source.fps) || Math.abs(meta.frames-source.frames)>1 || Math.abs(meta.fps-source.fps)>.05) throw new AppError("RESULT_ALIGNMENT","Bria 结果的帧数、帧率或时长与源片段不一致，已停止导出以避免错位。",422);
-  if(Math.abs(meta.width/meta.height-source.width/source.height)>.02) throw new AppError("RESULT_ASPECT","Bria 结果画面比例与源视频不一致，无法安全合成。",422);
+  const fpsDifference=Math.abs(meta.fps-source.fps);
+  // Permit integer FPS rounding only with identical frame counts and less than one frame
+  // of accumulated drift; duration checks still apply and export restores the source rate.
+  const roundedRate=meta.frames===source.frames&&Math.abs(meta.fps-Math.round(source.fps))<.0001&&fpsDifference*source.duration<=1;
+  if(Math.abs(meta.duration-source.duration)>Math.max(.15,2/source.fps) || Math.abs(meta.frames-source.frames)>1 || fpsDifference>.05&&!roundedRate) throw new AppError("RESULT_ALIGNMENT","Bria 结果的帧数、帧率或时长与源片段不一致，已停止导出以避免错位。",422);
+  const aspect=artifactRotation(meta,source)?meta.height/meta.width:meta.width/meta.height;
+  if((source.rotation??0)%360!==0&&!meta.rotation&&meta.width===source.codedWidth&&meta.height===source.codedHeight&&Math.abs(meta.width/meta.height-source.width/source.height)<=.02)throw new AppError("RESULT_ORIENTATION","结果缺少可确认的画面方向，已停止导出。",422);
+  if(Math.abs(aspect-source.width/source.height)>.02) throw new AppError("RESULT_ASPECT","Bria 结果画面比例与源视频不一致，无法安全合成。",422);
   if(kind==="alpha") {
     if(!meta.alpha) throw new AppError("ALPHA_MISSING","Bria 返回的视频不含透明通道，不能作为可换色结果。",422);
     await ffmpeg([...(meta.codec==="vp9"?["-c:v","libvpx-vp9"]:[]),...input(file),"-vf","alphaextract","-frames:v","1","-f","null","-"]);
@@ -129,22 +141,23 @@ export async function render(source:string,artifact:string,kind:"mask"|"alpha"|"
   const height=options.resolution==="source"?Math.ceil(sourceMeta.height/2)*2:options.resolution==="4K"?2160:1440;
   const color=COLORS.find(c=>c.name===options.color)!.hex.replace("#","0x");
   const artifactMeta=await probe(artifact,false,true);
+  const rotation=artifactRotation(artifactMeta,sourceMeta),orient=rotation===90?'transpose=cclock,':rotation===270?'transpose=clock,':'';
   const temp=output+".part.mp4";
   let route:ExportRecord["route"];
   try {
-    if(kind==="direct" && artifactMeta.width===width && artifactMeta.height===height && artifactMeta.codec==="h264" && artifactMeta.pixelFormat==="yuv420p" && artifactMeta.hasAudio===sourceMeta.hasAudio) {
+    if(kind==="direct" && artifactMeta.width===width && artifactMeta.height===height && artifactMeta.codec==="h264" && artifactMeta.pixelFormat==="yuv420p" && artifactMeta.hasAudio===sourceMeta.hasAudio && Math.abs(artifactMeta.fps-sourceMeta.fps)<.0001) {
       await copyFile(artifact,temp); route="direct_bria_mp4";
     } else {
       const fit=`scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1`;
       let args:string[],filter:string;
       if(kind==="direct") {
         args=[...input(artifact),...input(source)];
-        filter=`[0:v]setpts=PTS-STARTPTS,${fit},pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=${color}[out]`;
+        filter=`[0:v]${orient}settb=expr=1/${sourceMeta.fps},setpts=N,${fit},pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=${color}[out]`;
         route="transcode_only";
       } else {
         args=[...(kind==="alpha"&&artifactMeta.codec==="vp9"?["-c:v","libvpx-vp9"]:[]),...input(artifact),...input(source)];
         const aligned=`settb=expr=1/${sourceMeta.fps},setpts=N`;
-        const foreground=kind==="mask" ? `[0:v]${aligned},scale=${sourceMeta.width}:${sourceMeta.height},format=gray[mask];[1:v]${aligned},format=rgba[rgb];[rgb][mask]alphamerge=shortest=1[fg];` : `[0:v]${aligned},format=rgba[fg];`;
+        const foreground=kind==="mask" ? `[0:v]${orient}${aligned},scale=${sourceMeta.width}:${sourceMeta.height},format=gray[mask];[1:v]${aligned},format=rgba[rgb];[rgb][mask]alphamerge=shortest=1[fg];` : `[0:v]${orient}${aligned},format=rgba[fg];`;
         filter=foreground+`[fg]${fit}[fit];color=c=${color}:s=${width}x${height}:r=${sourceMeta.fps}:d=${sourceMeta.duration}[bg];[bg][fit]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1:format=auto,format=yuv420p[out]`;
         route=kind==="mask"?"mask_composite":"alpha_composite";
       }

@@ -147,7 +147,8 @@ test('cropped source and proxy retain matching frame count and audio duration',a
 test('Matroska uppercase alpha metadata is recognized',async()=>{
   const file=resolve(root,'alpha.mkv');
   await command('ffmpeg',['-hide_banner','-loglevel','error','-i',alpha,'-c','copy',file]);
-  const meta=await probe(file);assert.equal(meta.alpha,true);
+  await assert.rejects(probe(file),error=>error instanceof AppError&&error.code==='UNSUPPORTED_VIDEO_FORMAT');
+  const meta=await probe(file,false,true);assert.equal(meta.alpha,true);
 });
 
 test('source-sized export preserves portrait, square and odd-sized display geometry',async()=>{

@@ -8,6 +8,9 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     headers: { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" },
-    proxy: { "/browser": { target: "http://127.0.0.1:8787", changeOrigin: false } },
+    proxy: {
+      "/browser": { target: "http://127.0.0.1:8787", changeOrigin: false },
+      "/native": { target: "http://127.0.0.1:3002", changeOrigin: true, proxyTimeout: 1_900_000 },
+    },
   },
 });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, importVideo } from "./api";
 import useBackendHealth from "./useBackendHealth";
+import { nativeEnabled } from './browser/native';
 import type { ExportResult, Job, JobInput } from "./api";
 
 interface Props {
@@ -9,7 +10,7 @@ interface Props {
   onVideoImported:(id:string,meta:{width:number;height:number;duration:number})=>void;
   view:"source"|"result";onEditSource:()=>void;colorLabel:(name:string)=>string;
 }
-const LABELS:Record<string,string>={queued:"等待本地队列",preparing:"裁剪与准备视频",uploading:"上传视频到 Bria",submitting:"提交 Bria 任务",processing:"Bria 正在处理",downloading:"下载抠图结果",exporting:"本地合成与编码",completed:"处理完成",failed:"处理失败"};
+const LABELS:Record<string,string>={queued:"等待本地队列",preparing:"裁剪与准备视频",uploading:"上传视频到 Bria",submitting:"提交 Bria 任务",processing:"Bria 正在处理",downloading:"下载抠图结果",exporting:nativeEnabled?"本机 FFmpeg 合成与编码":"本地合成与编码",completed:"处理完成",failed:"处理失败"};
 const MODE_LABELS:Record<JobInput["mode"],string>={auto:"自动识别",prompt:"文字描述",points:"点选目标"};
 const STEPS=[{label:"准备素材",states:["local-upload","queued","preparing"]},{label:"提交抠图",states:["uploading","submitting"]},{label:"处理视频",states:["processing"]},{label:"导出成品",states:["downloading","exporting"]}];
 function TaskSteps({state}:{state:string}) {
@@ -275,7 +276,7 @@ export default function useProcessing(props:Props) {
         {!configured&&connected&&<button className="outline-button" onClick={()=>location.reload()}>重新检查登录</button>}
       </>}
     </div>
-    <p className="helper">视频在本机浏览器处理。处理时请保持页面打开；清除站点数据会删除本机素材和缓存，请及时下载成片。</p>
+    <p className="helper">{nativeEnabled?'成片由本机 FFmpeg 合成与编码。':'视频在本机浏览器处理。'}处理时请保持页面打开；清除站点数据会删除本机素材和缓存，请及时下载成片。</p>
     {message&&<p className="error-text" role="alert">{message}</p>}
     {pending&&!busy&&<button className="outline-button" onClick={()=>void action(async()=>{try{const existing=await api<Job>(`/api/jobs/${pending.id}`);setJob(existing);setPending(null);store(PENDING_JOB,null);}catch(e){if(e instanceof ApiError&&e.status===404)await submit(pending);else throw e;}})}>恢复未确认的提交</button>}
   </section>;

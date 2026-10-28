@@ -106,7 +106,15 @@ D1 先插入唯一占位再提交；同 ID 比较规范化参数的 SHA-256。�
 官方来源：[上传](https://docs.bria.ai/local-video-upload-service)、[自动](https://docs.bria.ai/video-editing/editing/remove-background)、[Prompt](https://docs.bria.ai/video-editing/masking/mask-by-prompt)、[点选](https://docs.bria.ai/video-editing/masking/mask-by-key-points)、[异步状态](https://docs.bria.ai/getting-started/async-requests)。上述 /v1 接口、去重及锁时长均为工程约定，不是 Bria 提供的 API。
 
 
-### 临时任务诊断日志
+### 本机原生合成服务（工程接口）
+
+仅本地原生模式使用，经 Vite `/native` 代理到 `127.0.0.1:3002`。所有请求须有 `X-Cutout-Client: 1`，只接受回环 Host 及允许的本地 Origin，不开放跨域访问。不调用 Bria、不返回磁盘路径或凭据。
+
+- `GET /native/health`：执行 FFmpeg／FFprobe 版本检查，成功返回 `{ok:true,service:"cutout-native",version:1}`。
+- `POST /native/render`：`Content-Type: application/octet-stream`，正文为源片段字节随后接结果字节。`X-Cutout-Render` JSON 含 `{sourceBytes,kind:"alpha"|"mask"|"direct",color,resolution:"source"}`；每份媒体最多 1 GB。参数只接收预设颜色，服务重新探测媒体而不信任客户端视频元数据。成功为 MP4 流，`X-Cutout-Result` 含 `{meta,bytes,route}`；返回前已通过结果和成片验收。临时文件正常结束后清理。
+- 正在处理另一请求返回 `409 NATIVE_BUSY`；工具缺失 `503 MEDIA_TOOL_MISSING`；媒体／结果无效返回明确错误。失败只重试本地合成，浏览器不得因此重发 Bria。
+
+### 临时任务诊断日志（浏览器云端）
 
 `POST /browser/diagnostics`：与 browser API 相同的会话、Origin、X-Cutout-Client 和有效 X-Cutout-Device；Content-Type 为 application/x-ndjson，Content-Length 为实际 UTF-8 字节数且不超过 1 MiB。只接受 schema=1 的匿名数字事件日志；成功 201 返回 `{id,bytes,createdAt}`。日志不经过 Bria。
 

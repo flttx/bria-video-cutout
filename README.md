@@ -1,6 +1,6 @@
 # Bria Video Cutout
 
-在线网页 + Cloudflare API + 浏览器本地 FFmpeg 的视频抠图工具。正常使用只需打开部署后的 HTTPS 网址，无需本机 Node.js、3001 服务或 ffmpeg.exe。AI 仅使用 Bria；确定性的视频预处理、合成与编码在本机浏览器执行。
+在线网页 + Cloudflare API + 本地 FFmpeg 的视频抠图工具。线上普通模式只需打开部署后的 HTTPS 网址，在浏览器内处理；本地原生模式通过 Node.js 调用 ffmpeg.exe 合成与编码。AI 仅使用 Bria。
 
 ## 当前架构
 
@@ -8,6 +8,7 @@
 - D1 保存云端任务、归属、上传引用和去重记录。
 - R2 私有临时桶接收 8 MiB 分片；Worker 流式转交给 Bria，成功后删除临时文件。异常遗留文件通过桶生命周期清理。
 - FFmpeg WebAssembly 在浏览器运行。素材、任务、Alpha／Mask 和成片保存在当前浏览器的 IndexedDB，预览／下载使用本机 Blob URL。
+- 本地原生模式沿用上述任务与缓存，最终结果校验、合成、编码交给回环地址 3002 的原生服务，导入探测和必要的上传前处理仍用 WASM。服务不调用 Bria，失败可复用原结果恢复导出。
 - 自动模式整段 MP4／MOV／WebM／AVI 通过格式、编码及时长检查后原文件直传；裁选、文字／点选代理及 GIF 兼容处理仍按需编码。首次导入仍需读取元数据，换背景和最终导出仍可能进行本地合成／编码。
 - 页面关闭后本地计算停止；重新打开同一站点、同一浏览器，可从保存阶段恢复。已尝试提交的任务仅查询原云端 ID，不自动重新付费提交。
 
@@ -42,7 +43,21 @@ npm run dev:worker
 npm run dev
 ```
 
-根目录 `.env.development` 的 `BRIA_TRANSPORT`、`CUTOUT_CLOUD_URL`、`CUTOUT_CLOUD_TOKEN` 和原生工具路径属于旧 Node API 配置，新网页不读取这些凭据。
+根目录 `.env.development` 的 `BRIA_TRANSPORT`、`CUTOUT_CLOUD_URL`、`CUTOUT_CLOUD_TOKEN` 属于旧 Node API 配置，新网页不读取这些凭据。
+
+### 本机原生 FFmpeg 模式
+
+配置本机 `FFMPEG_PATH`、`FFPROBE_PATH`（可沿用 Git 忽略的 `.env.development`，或把工具加入 PATH）。完成上述本地 Worker 配置后运行：
+
+```powershell
+npm run dev:local
+```
+
+访问 `http://127.0.0.1:5175/`，顶部显示“本机 FFmpeg 导出模式”。该命令启动 Worker 8787、原生服务 3002 和前端 5175；不要与已占用这些端口的服务重复启动。已有 Worker 时可分别运行 `npm run dev:native` 和 `npm run dev -w apps/web -- --mode native --port 5175`。
+
+刷新同一地址可继续使用原 IndexedDB 任务。已有失败任务点“恢复任务”，已有成片可换色重新导出，不需要再抠图。当前使用原生 CPU H.264 编码，未启用 GPU；原生服务不可用时明确报错，不自动改用 WASM。保持页面打开直到成片返回缓存，关闭页面可能使本机编码继续但无法接收成片，恢复时只重做本地导出。中转文件在正常请求结束或失败后清除；强制终止服务可能留下 `data/native` 临时文件。
+
+这是本地启动模式，不会让线上 HTTPS 页面自动调用本机工具，也不需要启动旧 3001 API。
 
 ## 验证
 
@@ -51,12 +66,13 @@ npm run typecheck
 npm run build
 npm run test:worker
 npm run test:browser
+npm run test:browser:native
 npm run test:local
 ```
 
-`build` 只 dry-run 打包，不部署。浏览器测试使用 Playwright 和本机 Chrome／Edge（也可设置 `BROWSER_TEST_EXECUTABLE`），Bria HTTP 被模拟；FFmpeg WASM 真实运行。测试生成素材及旧回归测试需要原生 FFmpeg／FFprobe，可沿用 `.env.development` 中的工具路径。
+`build` 只 dry-run 打包，不部署。浏览器测试使用 Playwright 和本机 Chrome／Edge（也可设置 `BROWSER_TEST_EXECUTABLE`），Bria HTTP 被模拟；FFmpeg WASM 真实运行。`test:browser:native` 启用真实原生服务验证浏览器导出、换色及失败恢复。测试生成素材及本地回归测试需要原生 FFmpeg／FFprobe，可沿用 `.env.development` 中的工具路径。
 
-旧 `apps/api` 与 `/v1/*` 仅保留用于历史兼容和回归，新网页没有 3001 依赖。旧 Matroska Alpha 测试仍有容器校验基线失败，详见 [PROGRESS.md](docs/PROGRESS.md)。原 `data/` 文件不会自动导入 IndexedDB，也不会被删除。
+旧 3001 API 与 `/v1/*` 保留用于历史兼容和回归，新网页没有 3001 依赖；原生合成服务复用 `apps/api` 中的媒体处理函数。Matroska 仅作为可信上游结果解析，仍不允许作为用户上传格式。原 `data/` 文件不会自动导入 IndexedDB，也不会被删除。
 
 ## 文档
 

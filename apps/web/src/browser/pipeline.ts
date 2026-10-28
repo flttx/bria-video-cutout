@@ -4,6 +4,7 @@ import type { JobRecord, ExportRecord, VideoRecord, VideoMeta } from '../../../a
 import type { CloudJobInput } from '../../../api/src/bria/cloud-contract.js';
 import * as store from './store';
 import * as media from './media';
+import { nativeEnabled, nativeHealth, nativeRender } from './native';
 
 interface BrowserJob extends JobRecord { owner?:string; rejected?:boolean }
 interface CloudView {id:string;state:string;warning?:boolean;resultAvailable?:boolean;httpStatus?:number}
@@ -82,7 +83,7 @@ async function renderExport(item:ExportRecord) {
     if(!job.artifactReady||!job.sourceMeta||!job.artifact)throw new AppError('NOT_READY','抠图缓存尚不可用。',409);
     const source=await store.get<Blob>('blob/source/'+job.id),artifact=await store.get<Blob>('blob/artifact/'+job.id);
     item.state='exporting';delete item.error;await store.put('export/'+item.id,item);
-    const result=await media.mediaSession(async()=>{
+    const result=nativeEnabled?await nativeRender(source,artifact,job.artifact,item):await media.mediaSession(async()=>{
       await media.writeBlob('source.mp4',source);await media.writeBlob('artifact',artifact);
       const result=await media.render('source.mp4','artifact',job.artifact!,'output.mp4',item,job.sourceMeta!);
       const blob=await media.readBlob('output.mp4');
@@ -100,16 +101,20 @@ async function run(id:string) {
     if(!job.artifactReady) {
       if(await identify()!==job.owner)throw new AppError('ACCOUNT_MISMATCH','请使用创建此任务的账号登录。',403);
       if(!job.submissionAttempted) {
+        if(nativeEnabled)await nativeHealth();
         const video=await store.get<VideoRecord>('video/'+job.input.videoId),file=await store.get<Blob>('blob/video/'+video.id);
-        if(job.input.mode==='auto'&&job.input.start===0&&job.input.end===video.meta.duration&&video.meta.containerDuration===undefined) {
+        if(job.input.mode==='auto'&&job.input.start===0&&job.input.end===video.meta.duration&&(video.meta.containerDuration===undefined||video.meta.rotation===undefined)) {
           // Older local records lack upload metadata; probe once instead of forcing a transcode.
           video.meta=await media.mediaSession(async()=>{await media.writeBlob('input',file);return media.probe('input');});
           await store.put('video/'+video.id,video);
         }
         // Whole-video auto jobs retain the original bytes. Include the container duration so
         // a longer audio track cannot turn a nominally valid selection into an over-limit upload.
+        const rotation=((video.meta.rotation??0)%360+360)%360;
         const original=job.input.mode==='auto'&&job.input.start===0&&job.input.end===video.meta.duration&&
-          !!video.meta.uploadMediaType&&video.meta.containerDuration!==undefined&&Math.max(video.meta.duration,video.meta.containerDuration)<=60;
+          !!video.meta.uploadMediaType&&video.meta.containerDuration!==undefined&&Math.max(video.meta.duration,video.meta.containerDuration)<=60&&
+          // Half-turns and square frames have ambiguous orientation after metadata is stripped.
+          (rotation===0||[90,270].includes(rotation)&&Math.abs(video.meta.codedWidth!/video.meta.codedHeight!-video.meta.width/video.meta.height)>.02);
         await state(job,original?'uploading':'preparing');
         const prepared=original?{meta:video.meta,source:file,proxyMeta:video.meta,transfer:file.slice(0,file.size,video.meta.uploadMediaType)}:await media.mediaSession(async()=>{
           await media.writeBlob('input',file);const meta=await media.prepare('input','source.mp4',job.input,video.meta);
@@ -149,7 +154,14 @@ async function run(id:string) {
       const downloaded=await fetch('/browser/jobs/'+job.cloudJobId+'/artifact',{redirect:'error',signal:AbortSignal.timeout(240000)});
       if(!downloaded.ok)await response(downloaded);
       const artifact=await downloaded.blob();
-      await media.mediaSession(async()=>{await media.writeBlob('artifact',artifact);await media.validateArtifact('artifact',job.sourceMeta!,job.artifact!);});
+      if(!nativeEnabled)await media.mediaSession(async()=>{
+        if(job.sourceMeta?.rotation===undefined) {
+          // Recover existing results using the cached source's actual display matrix; never resubmit.
+          await media.writeBlob('source',await store.get<Blob>('blob/source/'+id));
+          job.sourceMeta=await media.probe('source');await save(job);
+        }
+        await media.writeBlob('artifact',artifact);await media.validateArtifact('artifact',job.sourceMeta!,job.artifact!);
+      });
       await store.put('blob/artifact/'+id,artifact);job.artifactReady=true;await save(job);
     }
     job.exportId=id;const item:ExportRecord={id,jobId:id,color:job.input.color,resolution:'source',state:'queued',createdAt:new Date().toISOString()};
@@ -160,7 +172,7 @@ async function run(id:string) {
 export async function browserApi(path:string,body?:unknown,signal?:AbortSignal):Promise<unknown> {
   if(path==='/api/health') {
     if(!('locks' in navigator)||!('indexedDB' in window))throw new AppError('BROWSER_UNSUPPORTED','请使用支持浏览器存储和 Web Locks 的现代浏览器。',503);
-    try{const data=await cloud<{userId:string;processingReady:boolean}>('/health',undefined,signal);owner=data.userId;return {...data,ok:true,tokenConfigured:data.processingReady};}
+    try{const data=await cloud<{userId:string;processingReady:boolean}>('/health',undefined,signal);owner=data.userId;if(nativeEnabled)await nativeHealth();return {...data,ok:true,tokenConfigured:data.processingReady};}
     catch(error){return {ok:true,processingReady:false,tokenConfigured:false,message:error instanceof Error?error.message:'云端暂不可用。'};}
   }
   if(path==='/api/jobs'&&body===undefined) {

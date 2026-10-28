@@ -1,4 +1,5 @@
 import useProcessing from "./useProcessing";
+import { nativeEnabled } from './browser/native';
 import GuidedTour, { type TourStep } from "./GuidedTour";
 import { api, importVideo, previewVideo } from "./api";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
@@ -304,7 +305,7 @@ export default function App() {
     <main className="app-shell">
       <header className="header">
         <div className="brand"><span className="brand-logo">B</span><div><h1>Video Cutout <span>Lab</span></h1><p>Bria AI 视频抠图工作台</p></div></div>
-        <div className="header-tags"><span role="status" className={"status " + apiState}>{apiState === "online" ? "浏览器处理已就绪" : apiState === "offline" ? "浏览器处理不可用" : "正在检查环境"}</span></div>
+        <div className="header-tags"><span role="status" className={"status " + apiState}>{apiState === "online" ? (nativeEnabled?"本机 FFmpeg 导出模式":"浏览器处理已就绪") : apiState === "offline" ? "处理环境不可用" : "正在检查环境"}</span></div>
       </header>
 
       <div className="workspace">

@@ -14,8 +14,11 @@
     "test:local": "node --import tsx --test tests/*.test.ts",
     "test:worker": "npm run build -w apps/web && npm run build -w apps/worker && node --import tsx --test apps/worker/tests/*.test.ts",
     "dev:worker": "npm run dev -w apps/worker",
+    "dev:native": "node --import tsx apps/api/src/native-server.ts",
+    "dev:local": "concurrently -k \"npm run dev:worker\" \"npm run dev:native\" \"npm run dev -w apps/web -- --mode native --port 5175\"",
     "prepare:wasm": "node scripts/prepare-wasm.mjs",
     "test:browser": "npm run prepare:wasm && node --import tsx tests/browser.integration.mjs",
+    "test:browser:native": "npm run prepare:wasm && node --import tsx tests/browser.integration.mjs --native",
     "test:browser:duration": "npm run prepare:wasm && node --import tsx tests/browser-duration.integration.mjs"
   },
   "engines": {
