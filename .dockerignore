@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/dist-server
+**/.env
+**/.env.*
+**/.dev.vars*
+**/.wrangler
+**/*.log
+.git
+.tmp
+.tools
+.impeccable
+data
+apps/web/public/ffmpeg
+tests
+docs
+deploy/standalone/secrets

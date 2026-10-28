@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-server/
 .env
 .env.*
 *.log
@@ -13,3 +14,4 @@ data/
 .wrangler/
 .tools/
 apps/web/public/ffmpeg/
+deploy/standalone/secrets/

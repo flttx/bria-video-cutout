@@ -1,5 +1,17 @@
 # Bria 视频抠图方案：事实依据与来源
 
+## 2026-10-28 国内服务器独立部署复核
+
+**最终范围更新：**用户确认只交付供独立网页/APP 调用的 API 服务端，一个镜像，不含网页/Nginx/Caddy。使用服务端 Basic 认证和精确 CORS；原生 APP 可不带 Origin。旧的 Nginx/整站说明是此前方案记录，已由 [当前方案](STANDALONE_SERVER.md) 替代。Bria Token 仍只内置于 API 私有镜像，接口密码是另外生成的客户端登录凭据。
+
+- **用户需求更新：**应用可部署到国内服务器，覆盖此前只在本机处理的部署要求；43 寸设备仍只播放成片。
+- **官方复核：**重新读取 [自动接口 S1](https://docs.bria.ai/video-editing/editing/remove-background)、[文字 Mask S2](https://docs.bria.ai/video-editing/masking/mask-by-prompt)、[点选 Mask S3](https://docs.bria.ai/video-editing/masking/mask-by-key-points) 与 [上传 S4](https://docs.bria.ai/local-video-upload-service)。保留现有参数与时长限制，上传仍使用授权、multipart、file_url 流程；未增加任何 Bria 国内专线或区域可达性声明。
+- **工程选择：**复用 Node Pipeline 与原生 FFmpeg，单实例文件存储，腾讯云 CVM + Nginx 认证及 HTTP 反向代理；无域名时走 SSH 隧道，后续域名的 HTTPS 由外部入口处理；不依赖 Worker/D1/R2，不使用新 AI 模型。
+- **部署依据（按用户要求移除 Caddy）：**[Nginx 密码认证](https://nginx.org/en/docs/http/ngx_http_auth_basic_module.html)、[反向代理与缓冲](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)、[腾讯云 Nginx 证书部署](https://cloud.tencent.com/document/product/400/35244)、[腾讯云安全组](https://cloud.tencent.com/document/product/213/112614)、[域名 A 记录](https://cloud.tencent.com/document/api/302/3449)、[是否需要备案](https://cloud.tencent.com/document/api/243/19630)。证书由管理员下载、更新和重载，应用不自动申请/续期。
+- **待实测：**目标国内服务器到 Bria API/上传存储/结果存储的实际网络及设备播放。Linux 容器的本地验证以 PROGRESS.md 为准。主机资源与并发限制是工程预算，不是官方最低规格或性能承诺。
+- **镜像交付更正：**本地仓库通过 [buildx build](https://docs.docker.com/reference/cli/docker/buildx/build/) 指定目标 Linux 架构并加载镜像，再用 [image save](https://docs.docker.com/reference/cli/docker/image/save/) 打包；目标服务器用 [image load](https://docs.docker.com/reference/cli/docker/image/load/) 导入并启动纯运行 Compose，不需要源码仓库或构建环境。
+- **用户明确选择：**Token 内置于私有镜像的服务端配置，使用 `docker compose up -d`，不要求 start.sh、证书文件或目标机环境密钥。[BuildKit secret mount](https://docs.docker.com/build/building/secrets/) 避免凭据进入构建参数/日志，本项目有意将凭据复制到最终私有层，因此最终镜像仍须视为密钥载体；这不是官方建议的通用公开镜像做法。网页登录使用随机 256 位密码及 [Nginx 支持的 SSHA](https://nginx.org/en/docs/http/ngx_http_auth_basic_module.html) 存储，传输通过 SSH 或后续 HTTPS 入口保护。
+
 核对日期：2026-10-22。以下链接均指向官方技术文档；官方 API 可能更新，正式联调前需再次核对。文档中使用 [S1] 等编号回指本表。
 
 ## 官方接口及约束（已核对文档，不代表已通过账号实测）

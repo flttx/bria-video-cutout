@@ -1,5 +1,13 @@
 # Bria API 接口契约
 
+## 独立服务端接入（2026-10-28，工程契约）
+
+独立 API 镜像供单独网页和 APP 调用，不包含网页。使用下文 `/api/*` 业务端点，接口认证为 `Authorization: Basic base64(admin:接口密码)`，接口密码见私有交付文件，与 Bria Token 无关。Bria Token 只在服务端使用。按用户要求，APP 可内置接口凭据，网页通过启动配置读取，自动附加认证头，无需用户登录。客户端内置凭据可被提取；它拥有该单人服务的调用权限。
+
+网页来源由 WEB_ORIGIN 精确配置；允许 GET/POST/OPTIONS，预检无需登录，业务接口全部要求认证。CORS 允许 Authorization、Content-Type、X-Cutout-Client、X-Video-Filename、Range，暴露 Content-Disposition、Content-Length、Content-Range、Accept-Ranges。原生 APP 不要求 Origin；如果发送 Origin 则必须匹配。POST 必须带 X-Cutout-Client: 1，浏览器 POST 必须有匹配来源。未认证返回 401，来源或客户端标记错误返回 403。
+
+下载/预览也需要认证。独立网页通过带认证的 fetch 获取 Blob；APP 使用带认证头的下载器/播放器。响应中的 `/api/...` 路径相对 API 地址解析。默认监听服务器回环 3001，正式客户端使用外部 HTTPS 入口；详细配置见 [镜像交付与启动命令](镜像交付与启动命令.md)。下文 `/browser/*` 是旧 Cloudflare 架构，不属于该服务端镜像。
+
 官方 API 总索引：https://docs.bria.ai/video-editing
 完整来源与条款对照：[SOURCES.md](./SOURCES.md)（2026-10-22 核验）。本文件所述 Bria 参数、限制以各端点的官方链接为准；项目定义和待联调项另行注明。
 

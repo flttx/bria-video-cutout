@@ -11,13 +11,32 @@ import { MAX_BYTES, validId } from "./model.js";
 import type { VideoRecord, JobRecord, ExportRecord } from "./model.js";
 import { compatiblePreview, createThumbnail, probe } from "./media.js";
 import { Pipeline, jobView, exportView } from "./pipeline.js";
+import { verifyProxyToken, verifyBasicAuth } from "./deployment.js";
+import type { ServerAccess } from "./deployment.js";
 
-export async function createServer(engine:Pipeline, tokenConfigured:boolean, extraOrigin?:string, checkService?:()=>Promise<void>) {
+export async function createServer(engine:Pipeline, tokenConfigured:boolean, extraOrigin?:string, checkService?:()=>Promise<void>, access?:ServerAccess) {
   const app=Fastify({logger:false,bodyLimit:64*1024,requestTimeout:600000});
-  const origins=new Set(["http://localhost:5173","http://127.0.0.1:5173","http://localhost:5174","http://127.0.0.1:5174",...(extraOrigin?[extraOrigin]:[])]);
-  await app.register(cors,{origin:[...origins]});
+  const origins=new Set(access?[access.origin]:["http://localhost:5173","http://127.0.0.1:5173","http://localhost:5174","http://127.0.0.1:5174",...(extraOrigin?[extraOrigin]:[])]);
+  if(!access)await app.register(cors,{origin:[...origins]});
+  if(access?.mode==="basic")await app.register(cors,{
+    origin:[...origins],methods:["GET","POST","OPTIONS"],
+    allowedHeaders:["Authorization","Content-Type","X-Cutout-Client","X-Video-Filename","Range"],
+    exposedHeaders:["Content-Disposition","Content-Length","Content-Range","Accept-Ranges"],
+    maxAge:600,
+  });
   app.addHook("onRequest",async(request,reply)=>{
     reply.header("Cache-Control","no-store").header("X-Content-Type-Options","nosniff");
+    if(access) {
+      if(access.mode==="basic") {
+        try {verifyBasicAuth(request.headers.authorization,access.proxyToken);}
+        catch(error){reply.header("WWW-Authenticate",'Basic realm="Cutout API", charset="UTF-8"');throw error;}
+        // Native apps send no Origin. Browser mutations must carry the exact allowed Origin.
+        if(!request.headers.origin&&request.method==="POST"&&request.headers["sec-fetch-site"]!==undefined)throw new AppError("ORIGIN_REJECTED","浏览器请求缺少有效来源。",403);
+      } else {
+        verifyProxyToken(request.headers["x-cutout-proxy-token"],access.proxyToken);
+        if(request.headers["sec-fetch-site"]==="cross-site" || (request.method==="POST"&&request.headers.origin!==access.origin))throw new AppError("ORIGIN_REJECTED","请从本站页面发起请求。",403);
+      }
+    }
     if(request.headers.origin&&!origins.has(request.headers.origin))throw new AppError("ORIGIN_REJECTED","不允许此来源访问本地服务。",403);
     if(request.method==="POST"&&request.headers["x-cutout-client"]!=="1")throw new AppError("CLIENT_HEADER_REQUIRED","请求缺少本地客户端标识。",403);
   });
@@ -65,7 +84,7 @@ export async function createServer(engine:Pipeline, tokenConfigured:boolean, ext
     let video:VideoRecord|undefined;
     try {video=await engine.store.get<VideoRecord>("videos",job.input.videoId);}
     catch(error) {if(!(error instanceof AppError)||error.code!=="NOT_FOUND")throw error;}
-    return {...jobView(job),filename:video?.filename,videoDuration:video?.meta.duration};
+    return {...jobView(job),filename:video?.filename,videoDuration:video?.meta.duration,thumbnailUrl:`/api/jobs/${job.id}/thumbnail`};
   }
   app.post("/api/jobs",async(request,reply)=>reply.code(202).send(await describeJob(await engine.create(request.body))));
   app.get("/api/jobs",async()=>{

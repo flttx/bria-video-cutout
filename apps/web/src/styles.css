@@ -1,4 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap");
 @import "./tokens.css";
 
 :root { font-family: var(--font); font-size: var(--fs-md); line-height: 1.45; color: var(--tx-body); background: var(--bg-page); color-scheme: dark; font-synthesis: none; }

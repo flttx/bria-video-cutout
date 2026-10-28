@@ -1,5 +1,28 @@
-import { browserApi, importVideo, previewVideo } from './browser/pipeline';
-export { importVideo, previewVideo };
+import type { VideoRecord } from '../../api/src/model';
+export const serverEnabled=import.meta.env.MODE==='server';
+export async function importVideo(file:File,progress:(percent:number)=>void=()=>{}):Promise<VideoRecord> {
+  if(!serverEnabled)return (await import('./browser/pipeline')).importVideo(file,progress);
+  if(!file.size||file.size>1_000_000_000)throw new ApiError('文件须大于 0 字节且不超过 1 GB。',413);
+  progress(0);
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST','/api/videos');xhr.timeout=600000;
+    xhr.setRequestHeader('Content-Type','application/octet-stream');
+    xhr.setRequestHeader('X-Cutout-Client','1');
+    xhr.setRequestHeader('X-Video-Filename',encodeURIComponent(file.name));
+    xhr.upload.onprogress=event=>{if(event.lengthComputable)progress(Math.min(99,Math.round(event.loaded/event.total*100)));};
+    xhr.onerror=xhr.ontimeout=xhr.onabort=()=>reject(new ApiError('上传中断，请检查服务器连接后重试。',0));
+    xhr.onload=()=>{
+      void parseResponse<VideoRecord>(new Response(xhr.responseText,{status:xhr.status})).then(record=>{progress(100);resolve(record);},reject);
+    };
+    xhr.send(file);
+  });
+}
+export async function previewVideo(id:string) {
+  if(!serverEnabled)return (await import('./browser/pipeline')).previewVideo(id);
+  await api(`/api/videos/${encodeURIComponent(id)}/preview`,{});
+  return `/api/videos/${encodeURIComponent(id)}/preview`;
+}
 export interface JobInput {
   id:string; videoId:string; mode:"auto"|"prompt"|"points"; prompt:string;
   points:{x:number;y:number;type:"positive"|"negative";atSeconds:number}[];
@@ -21,12 +44,13 @@ export interface ExportResult {
 }
 export class ApiError extends Error {constructor(message:string,readonly status:number){super(message);}}
 export async function api<T>(path:string,body?:unknown,signal?:AbortSignal):Promise<T> {
-  try{return await browserApi(path,body,signal) as T;}catch(error){if(error instanceof Error && 'statusCode' in error)throw new ApiError(error.message,Number(error.statusCode));throw error;}
+  if(serverEnabled)return parseResponse<T>(await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',redirect:'error',headers:body===undefined?{}:{'Content-Type':'application/json','X-Cutout-Client':'1'},body:body===undefined?undefined:JSON.stringify(body),signal:signal??AbortSignal.timeout(600000)}));
+  try{return await (await import('./browser/pipeline')).browserApi(path,body,signal) as T;}catch(error){if(error instanceof Error && 'statusCode' in error)throw new ApiError(error.message,Number(error.statusCode));throw error;}
 }
 export async function parseResponse<T>(response:Response):Promise<T> {
   const data:unknown=await response.json().catch(()=>null);
   if(!response.ok) {
-    const message=data&&typeof data==="object"&&"message"in data&&typeof data.message==="string"?data.message:`本地请求失败（HTTP ${response.status}）。`;
+    const message=data&&typeof data==="object"&&"message"in data&&typeof data.message==="string"?data.message:`请求失败（HTTP ${response.status}）。`;
     throw new ApiError(message,response.status);
   }
   return data as T;

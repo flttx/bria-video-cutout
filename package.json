@@ -7,6 +7,11 @@
     "apps/*"
   ],
   "scripts": {
+    "dev:server": "npm run dev:server -w apps/web",
+    "build:server": "npm run build -w apps/api && npm run build:server -w apps/web",
+    "start:server": "node apps/api/dist/server.js",
+    "test:server": "node --import tsx --test tests/standalone.test.ts",
+    "test:browser:server": "npm run build:server && node --import tsx tests/server-browser.integration.mjs",
     "dev": "npm run dev -w apps/web",
     "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web && npm run typecheck -w apps/worker",
     "build": "npm run build -w apps/api && npm run build -w apps/web && npm run build -w apps/worker",
@@ -15,7 +20,7 @@
     "test:worker": "npm run build -w apps/web && npm run build -w apps/worker && node --import tsx --test apps/worker/tests/*.test.ts",
     "dev:worker": "npm run dev -w apps/worker",
     "dev:native": "node --import tsx apps/api/src/native-server.ts",
-    "dev:local": "concurrently -k \"npm run dev:worker\" \"npm run dev:native\" \"npm run dev -w apps/web -- --mode native --port 5175\"",
+    "dev:local": "concurrently -k \"npm run dev:worker\" \"npm run dev:native\" \"npm run dev:native -w apps/web\"",
     "prepare:wasm": "node scripts/prepare-wasm.mjs",
     "test:browser": "npm run prepare:wasm && node --import tsx tests/browser.integration.mjs",
     "test:browser:native": "npm run prepare:wasm && node --import tsx tests/browser.integration.mjs --native",

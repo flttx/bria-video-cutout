@@ -1,0 +1,5 @@
+# Copy to apps/web/.env.server.local. This is read by the web startup process.
+# Use API credentials from PRIVATE_ACCESS.txt, never the Bria token.
+CUTOUT_API_BASE_URL=http://127.0.0.1:3001
+CUTOUT_API_USERNAME=admin
+CUTOUT_API_PASSWORD=

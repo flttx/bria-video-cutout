@@ -1,7 +1,7 @@
 import useProcessing from "./useProcessing";
 import { nativeEnabled } from './browser/native';
 import GuidedTour, { type TourStep } from "./GuidedTour";
-import { api, importVideo, previewVideo } from "./api";
+import { api, importVideo, previewVideo, serverEnabled } from "./api";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 
 type Mode = "auto" | "prompt" | "points";
@@ -110,7 +110,7 @@ export default function App() {
       {target:'[data-tour="prompt"]',title:"写清目标特征",body:"例如“穿红色外套的人”或“画面中央的白色汽车”。文字描述模式每段最多处理 5 秒。"},
       {target:'[data-tour="source"]',title:"导入并检查视频",body:"点击或拖入 Bria 支持的视频。系统会读取时长；超过 5 秒时需要先裁选处理片段。"},
       {target:'[data-tour="background"]',title:"选择成品背景",body:"选择纯色背景。尺寸和帧率会跟随原视频，完成后可预览并下载 MP4。"},
-      {target:'[data-tour="start"]',title:"提交并跟踪进度",body:"点击开始后任务会出现在任务记录中。素材在本机浏览器准备，Bria 阶段显示当前状态。"},
+      {target:'[data-tour="start"]',title:"提交并跟踪进度",body:serverEnabled?"点击开始后素材上传服务器，任务接收后可在记录中跟踪进度。":"点击开始后任务会出现在任务记录中。素材在本机浏览器准备，Bria 阶段显示当前状态。"},
       {target:'[data-tour="task-history"]',title:"查看任务记录",body:"任务记录会显示处理阶段和进度。完成后点击任务上的“预览视频”打开弹窗，也可直接下载成品。"},
     ];
     if(guideMode==="points")return [
@@ -125,7 +125,7 @@ export default function App() {
       {target:'[data-tour="mode"]',title:"自动识别前景",body:"自动识别会尝试保留画面中的整体前景，适合人物、宠物或主体轮廓明显的素材。"},
       {target:'[data-tour="source"]',title:"导入并检查视频",body:"点击或拖入 Bria 支持的视频。自动识别每段最多处理 60 秒；更长的视频需要先裁选片段。"},
       {target:'[data-tour="background"]',title:"选择成品背景",body:"选择纯色背景。完成后可以先预览结果，再下载 MP4。"},
-      {target:'[data-tour="cache"]',title:"保留透明抠图缓存",body:"开启后可在本机重新合成不同背景，不用再次调用 Bria；缓存会占用本机磁盘。"},
+      {target:'[data-tour="cache"]',title:"保留透明抠图缓存",body:serverEnabled?"开启后可在服务器重新合成不同背景，不用再次调用 Bria；缓存会占用服务器磁盘。":"开启后可在本机重新合成不同背景，不用再次调用 Bria；缓存会占用本机磁盘。"},
       {target:'[data-tour="start"]',title:"开始处理",body:"提交后会调用 Bria。素材先在浏览器准备，之后按排队、处理、导出等状态更新。"},
       {target:'[data-tour="task-history"]',title:"跟踪任务和下载成品",body:"任务记录会自动展开并显示处理状态。完成后可直接打开预览弹窗或下载成品；刷新页面后记录仍保留。"},
     ];
@@ -305,7 +305,7 @@ export default function App() {
     <main className="app-shell">
       <header className="header">
         <div className="brand"><span className="brand-logo">B</span><div><h1>Video Cutout <span>Lab</span></h1><p>Bria AI 视频抠图工作台</p></div></div>
-        <div className="header-tags"><span role="status" className={"status " + apiState}>{apiState === "online" ? (nativeEnabled?"本机 FFmpeg 导出模式":"浏览器处理已就绪") : apiState === "offline" ? "处理环境不可用" : "正在检查环境"}</span></div>
+        <div className="header-tags"><span role="status" className={"status " + apiState}>{apiState === "online" ? (serverEnabled?"服务器处理模式":nativeEnabled?"本机 FFmpeg 导出模式":"浏览器处理已就绪") : apiState === "offline" ? "处理环境不可用" : "正在检查环境"}</span></div>
       </header>
 
       <div className="workspace">
@@ -319,7 +319,7 @@ export default function App() {
           </section>
           <div className="control-group"><span id="mode-label" className="section-label">抠图方式</span><div className="mode-list" role="group" aria-labelledby="mode-label" data-tour="mode">
             {MODES.map((item) => <button key={item.id} aria-pressed={mode === item.id} aria-label={`${item.buttonLabel}（${item.label}）`} title={item.detail} className={"mode-option " + (mode === item.id ? "active" : "")} onClick={() => { setMode(item.id); setPreview("source"); setFileError(""); videoRef.current?.pause(); }}><strong>{item.buttonLabel}</strong></button>)}
-          </div><div id="mode-limits" className="mode-limits" role="status" aria-live="polite"><p className={flow.durationOverLimit ? "duration-check" : videoFile && meta ? "duration-valid" : "duration-pending"}>{flow.durationStatus}</p><p className="helper">{selectedMode.limits}</p>{mode !== "auto" && <details className="mode-details"><summary>处理说明</summary><p className="helper">本地处理代理最高 1280 × 720，最终按原视频尺寸合成；放大遮罩不会增加细节。</p></details>}</div><div className="mode-guide-row"><button type="button" className="guide-link" onClick={()=>startGuide(mode)}>查看操作引导</button></div></div>
+          </div><div id="mode-limits" className="mode-limits" role="status" aria-live="polite"><p className={flow.durationOverLimit ? "duration-check" : videoFile && meta ? "duration-valid" : "duration-pending"}>{flow.durationStatus}</p><p className="helper">{selectedMode.limits}</p>{mode !== "auto" && <details className="mode-details"><summary>处理说明</summary><p className="helper">处理代理最高 1280 × 720，最终按原视频尺寸合成；放大遮罩不会增加细节。</p></details>}</div><div className="mode-guide-row"><button type="button" className="guide-link" onClick={()=>startGuide(mode)}>查看操作引导</button></div></div>
           {flow.editingResult && <p className="helper mode-edit-hint">切换方式可重新设置抠图目标，当前结果仍可查看。</p>}
           <div hidden={flow.editingResult}>
           {mode === "prompt" && <div className="control-group" data-tour="prompt"><label className="section-label" htmlFor="target-prompt">要保留的对象</label><textarea id="target-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} placeholder="例如：红色汽车、穿蓝色外套的人" /><p className="helper">有多个相似对象时，建议用“点选目标”指定其中一个。</p></div>}

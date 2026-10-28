@@ -487,3 +487,63 @@
 - [x] 原生 HTTP 实测合成素材 720×1280、653 帧、59.92fps、约 10.9 秒，传输／校验／编码共 4.39 秒，输出音轨／帧数／方向／规格通过。该数据不是用户原片耗时承诺，也不是 GPU 加速结果。
 - [x] 启动本机服务并将原 `5175` 前端切到 native 模式，健康检查显示原生与云端均就绪；独立 Chromium 上确认模式标识及页面健康状态，没有操作用户浏览器任务或提交真实 Bria。
 - [ ] 用户原任务的实际恢复／耗时仍待用户刷新同一地址确认；强制退出本机进程可能留下 `data/native` 中转文件。未提交、推送或部署。
+
+## 国内服务器独立部署适配（2026-10-28）
+
+- [x] 用户要求新增可独立部署到国内服务器的版本；新增 [独立部署方案](STANDALONE_SERVER.md)，明确单人私有、单 API 实例、持久化磁盘、迁移边界、部署/备份/回滚/验收步骤。服务器处理覆盖旧的仅本机处理约定，43 寸设备仍只播放成片。
+- [x] 新增 Vite server 构建，前端通过同源 `/api` 上传、预览、任务查询和下载；复用原 Node Pipeline、原生 FFmpeg 与文件状态存储。素材和任务在服务器保存，任务接收后关闭页面仍继续。保留原 Cloudflare/WASM/native 模式，不自动迁移 D1/R2/IndexedDB，不自动重发结果不明的收费请求。
+- [x] 提供 Docker 多阶段构建、Compose、Caddy HTTPS/Basic Auth 和配置模板。仅对外开放 80/443，API 非 root、只读根目录、独立数据卷；内部密钥、精确 Origin、客户端标记校验均启用。独立模式配置缺失即拒绝启动，检查媒体工具和目录写权限，不加载本机开发环境凭据。
+- [x] 服务模式界面明确服务器处理和存储；独立包不携带 WASM 大文件。移除 Google Fonts 外链，浏览器验证无外部静态资源、Worker、WASM 或本机 native 服务请求。
+- [x] `npm run typecheck`、`npm run build:server`、`npm run test:local`（23/23）、`npm test`（55/55，含原前端构建、Worker dry-run）通过。新增服务器专项 3 项覆盖配置拒绝、API 认证与来源校验、真实上传探测/预览、重启恢复、换色复用、Range、下载头、缩略图与无签名地址泄露。测试上游均模拟。
+- [x] `npm run test:browser:server` 通过；本机 Caddy 2.11.7 实际加载部署配置（仅为测试替换回环 HTTP 地址、静态目录和 API 上游），验证未登录拒绝、Basic Auth、反向代理、构建后前端真实文件上传、关闭页面后后台完成、重新打开读取历史、播放、下载和 FFmpeg 完整解码。已查看桌面截图，服务器模式标识与历史布局正常；不等同于真实素材画质或设备验收。
+- [x] Docker Compose `config --quiet`、Caddy 原始生产配置 `validate` 通过，均使用合成凭据。浏览器证据保存在 `.tmp/server-browser/`，测试素材与凭据未进入 Git。
+- [x] 原 `npm run test:browser` 完整回归通过：三模式真实 WASM、刷新恢复、缓存换色、4K 三帧冒烟、生产包页面提交/下载、原字节直传、旋转与结果拒绝；未新增本地 API 依赖。最终类型与差异检查通过。
+- [ ] 本机 Docker Linux 引擎未运行，尚未执行镜像构建或容器运行；目标服务器 TLS 证书、真实 Bria 出入站网络、长片资源上限、备份恢复与 43 寸设备播放待验收。`health` 不代表 Bria 网络或账户额度通过。本版无多租户、自动清理或在线一致性备份。
+- 未部署、未迁移生产数据、未新增 Bria 付费调用、未提交或推送。
+
+## 腾讯云 CVM + 域名部署调整（2026-10-28，替代上节入口方案）
+
+- [x] 根据用户明确要求移除 Caddy：删除 Caddyfile，web 镜像改为 Nginx，移除自动证书卷和旧密码环境变量。上节 Caddy 验证仅为历史记录，不代表当前部署方案。
+- [x] 新增 `deploy/standalone/nginx.conf.template`：80 跳转 HTTPS、证书链/私钥/密码文件只读挂载，页面/API/媒体均需认证；覆盖内部校验头，保留 Origin/客户端标记检查、1 GB 上传限制和 Range，流式上传/下载关闭代理缓冲。仅发布 80/443，API 不映射到宿主机。
+- [x] 文档调整为腾讯云 CVM + 域名 A 记录 + 安全组 + 腾讯云 SSL 证书下载/更新/重载；明确大陆域名接入备案依据、已有 Nginx 端口冲突处理、证书目录权限与 Git/Docker 构建排除。默认不依赖 CLB、COS 或 CDN。
+- [x] 本轮类型检查、服务器构建、3/3 服务器专项和 Compose 配置校验通过。实际 Nginx 1.30.6 回环 HTTP 浏览器联调通过：匿名/错误密码拒绝、正确认证、真实上传、关闭页面后后台完成、重新打开历史、成片播放/下载及 FFmpeg 解码；Bria 为模拟响应。另使用合成证书验证含 TLS 指令的 Nginx 配置 `nginx -t` 通过。
+- [ ] 本机 Docker 引擎仍未运行，未进行 Linux 镜像构建/容器验证。生产 bcrypt 密码文件与真实证书、腾讯云 DNS/安全组、Bria 实际出入站及设备播放需上机验收；本机 HTTP 测试不等于公网 HTTPS 验收。
+- 未部署、未修改腾讯云资源或域名解析、未新增付费 Bria 调用、未提交或推送。
+
+## 镜像交付流程更正（2026-10-28，当前部署主流程）
+
+- [x] 按用户要求将主流程明确为本地仓库构建镜像、导出镜像包，目标服务器只接收镜像/Compose/运行配置并启动。目标机无需源码、Git、npm、Node.js、FFmpeg 或构建工具；之前在目标机仓库构建的说明已替换。
+- [x] `compose.yaml` 移除所有 build/context，仅引用固定版本镜像且 pull_policy=never。新增 `build-release.ps1` 本地构建两个 Linux 运行镜像并导出一个 images.tar，随包提供运行配置、start.sh、校验值、版本标记与说明；不打包生产凭据。新增 start.sh，只使用已导入镜像，校验配置/证书后启动。
+- [x] PowerShell/shell 语法、独立运行目录的 Compose 配置校验及差异检查通过。模拟 Docker 的打包回归覆盖运行文件白名单、空凭据、版本/哈希和拒绝覆盖；该测试不生成真实镜像，合成产物已清除。
+- [ ] 实际调用本地打包入口，因 Docker Linux 引擎未启动而在创建产物目录前停止；尚无可交付的真实 images.tar。启动本机 Docker Desktop 的 Linux 引擎后运行打包命令即可继续，无需修改目标机部署方式。未部署、未新增付费请求、未提交或推送。
+
+## 私有镜像最终交付（2026-10-28，替代上述旧启动流程）
+
+- [x] 按用户要求内置服务端 Bria Token、内部代理密钥及网页登录配置，移除 start.sh 和外置 Token/证书配置前提。私有文件通过 BuildKit secret mount 传入并有意保存在最终服务端镜像；构建参数不含凭据，私有层强制禁用缓存，避免换密钥后复用旧层。镜像不可公开。
+- [x] 无域名阶段默认 `127.0.0.1:8080`，通过 SSH 隧道访问 `http://localhost:8080`；后续修改精确 WEB_ORIGIN，由外部入口负责 HTTPS。API 只额外允许回环 HTTP Origin，认证和来源校验保留。用户明确本次不处理证书。
+- [x] 实际构建 `linux/amd64` 的 `bria-cutout-api:tencent-20261028-v1` 和 `bria-cutout-web:tencent-20261028-v1`，交付目录 `.tmp/releases/tencent-20261028-v1/` 包含 6 个文件。`images.tar` 为 342,866,944 字节；SHA-256 为 `86a20b85374ba86efaf2530b2c6b023083cd2255ad5caad63f2c8087fddd76f5`。新增 [镜像交付与启动命令](镜像交付与启动命令.md)，随包提供 DEPLOY.md。
+- [x] 全项目 typecheck、服务端构建、4/4 服务器专项及模拟打包回归通过。专项新增私有配置读取、运行环境优先、缺失文件拒绝启动、独立模式不隐式读取本机密钥、回环 HTTP 与伪回环/公网 HTTP 拒绝。打包回归覆盖固定版本、运行文件白名单、无 Token 构建参数、私有层缓存失效、临时配置清理和拒绝覆盖。
+- [x] 真实 Nginx 浏览器联调通过上传、后台完成、历史、播放、下载和 FFmpeg 解码（Bria 模拟）。实际交付包 `docker load`、纯运行 Compose `config --quiet` / `up -d` 通过，API healthy。真实镜像浏览器冒烟通过匿名/错误密码拒绝、正确登录、API/网页读取、错误 Origin 拒绝、非 root API、内置配置及响应/前端资源/日志无 Bria Token；桌面截图已查看。没有提交真实 Bria 任务。
+- [x] 差异检查通过。之前“Docker 引擎未启动/没有真实镜像”的记录仅为历史状态，已被本次实际构建与容器验证替代。
+- [ ] 目标腾讯云网络、实际 Bria 账户/任务、长片资源上限、备份恢复和 43 寸播放仍待上机验收；本地健康检查不替代这些验收。未提交、推送或远端部署。
+- 自动审批拒绝清理中断构建留下的 `.tmp/private-build/8bc9c2003f8b46deaaee749f34854ee5`，仅返回策略阻止，故该被 Git/Docker 忽略的临时私有目录保留；成功构建自己的临时配置已由 finally 清理。
+
+## 纯 API 镜像交付与网页/APP 自动认证（2026-10-28，最终范围）
+
+- [x] 用户进一步明确只要独立服务端，由单独网页或 APP 调用；移除 Dockerfile 网页构建/运行阶段和 Compose web 服务。最终交付只有 `bria-cutout-api:backend-20261028-v1` 一个镜像，不含网页或 Nginx。旧 `tencent-20261028-v1` 整站包不作为本次交付，未擅自删除历史产物。
+- [x] 独立模式支持 Basic API 认证和精确 CORS，原生 APP 可不带 Origin，网页按 WEB_ORIGIN 匹配；允许认证/上传/Range 预检并暴露下载响应头，POST 保留客户端标记。Bria Token 仅在服务端，API 凭据单独随机生成。旧代理认证仅作兼容。
+- [x] 用户选择免登录操作：APP 可内置接口凭据，网页可以启动环境配置注入，所有请求自动附加认证头；无登录页面或前置登录接口。文档说明客户端内置凭据可提取、网页服务器变量不会自动成为浏览器变量、Bria Token 不下发客户端，明确 API 地址与网页来源的区别。
+- [x] 最终目录 `.tmp/releases/backend-20261028-v1/` 有 6 个文件：images.tar、compose.yaml、PRIVATE_ACCESS.txt、DEPLOY.md、SHA256SUMS、RELEASE.txt。Linux amd64 镜像包 279,127,040 字节（约 266 MiB），SHA-256 `4e0abbbef163f45327ba7f871411290ea3b1a1189be45443ee79a46f6aeed074`；启动和客户端接入文档同步至交付包。
+- [x] 全项目 typecheck、实际 Docker API 构建、Compose config、docker load/up 通过。服务专项 5/5、本地回归 25/25、模拟打包验证通过；包含精确 CORS 允许/拒绝、认证/无认证、APP 无 Origin、浏览器缺 Origin、预检及客户端标记检查。
+- [x] 真实纯 API 镜像 healthy，默认回环 3001；实际浏览器从独立 8080 来源携带配置凭据调用成功，伪来源被 CORS 阻止；APP 式无 Origin 请求成功，匿名/错误凭据被拒绝。确认镜像无网页目录、根路径认证后 404、API 非 root、内置服务端配置可用、响应和日志不泄露 Bria Token。测试不提交真实 Bria，测试容器验证后停止，数据卷保留。
+- [ ] 未部署腾讯云，未验证目标网络、真实收费任务、长片负载和设备播放；独立网页启动配置注入及 APP 凭据装配由各客户端项目接入，不属于服务端镜像。此前被自动审批拒绝清理的临时目录仍保留，位置见上一节。
+
+## 当前网页默认连接 Docker API（2026-10-28）
+
+- [x] 用户要求当前网页直接启动、免登录连接 Docker Desktop 服务。默认 `npm run dev` 现在启动前端 localhost:8080 并调用独立 API，无需用户选择模式；Docker API 单独启动，未将网页加入服务端镜像。
+- [x] Vite 启动配置读取 `apps/web/.env.server.local` 的 CUTOUT_API_BASE_URL/USERNAME/PASSWORD，统一为同源 /api 代理附加 Basic 认证，覆盖 JSON、上传、预览、缩略图、Range 和下载。变量无 VITE_ 前缀，不注入客户端；实际私有配置已创建并确认 Git 忽略。未输出凭据。
+- [x] 保留原 Cloudflare 浏览器入口 `npm run dev:browser -w apps/web` 与 native 入口 `npm run dev:native -w apps/web`，dev:local 同步使用 native 入口。服务器连接错误文案不再要求重新登录。
+- [x] 实际通过 Docker Desktop 启动 `bria-cutout-api:backend-20261028-v1`，回环端口 3001，healthy；前端通过默认 npm run dev 保持运行于 http://localhost:8080。仅本机访问，不使用公网服务入口。
+- [x] 全项目 typecheck、服务构建、真实浏览器联调及 diff 检查通过。自动联调使用真实启动代理和模拟 Bria，覆盖上传、关闭网页后台完成、历史、预览和下载；未通过测试专用 header 注入绕过实际配置。
+- [x] 当前运行网页连接真实 Docker API：匿名浏览器不输入凭据即可健康检查、上传一秒合成视频、生成真实 FFmpeg 预览、Range 读取及解码播放；确认浏览器请求无接口认证头、前端响应及构建资源无接口密码，Bria 任务数不变。截图 `.tmp/web-api-live/connected.png` 已查看；合成上传记录 77407010-665b-4d58-a448-8d832e116e1f 保留用于检查。
+- [x] README、配置模板及交付启动文档同步更新。当前本地使用 Vite 开发代理，正式静态站点发布仍需其托管侧 /api 代理或独立直连配置；未宣称 Vite 开发代理会随静态文件发布。未调用真实收费任务、未远端部署或提交。

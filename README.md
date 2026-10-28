@@ -1,5 +1,7 @@
 # Bria Video Cutout
 
+新增 **[独立 API 服务端](docs/STANDALONE_SERVER.md)**：供单独网页或 APP 调用。本地构建一个内置服务端 Bria Token 的私有镜像，服务器执行 `docker load -i images.tar`、`docker compose up -d`；镜像不包含网页、Nginx 或 Caddy。支持独立接口认证和精确 CORS，启动及接入命令见 [镜像交付与启动命令](docs/镜像交付与启动命令.md)。以下原架构与开发命令继续保留。
+
 在线网页 + Cloudflare API + 本地 FFmpeg 的视频抠图工具。线上普通模式只需打开部署后的 HTTPS 网址，在浏览器内处理；本地原生模式通过 Node.js 调用 ffmpeg.exe 合成与编码。AI 仅使用 Bria。
 
 ## 当前架构
@@ -24,7 +26,20 @@ Bria 自动模式最长 60 秒：[官方自动接口](https://docs.bria.ai/video
 
 ## 本地开发（只用于开发，不是用户运行要求）
 
-需要 Node.js 22.12+ 与 npm。新前端不再代理 3001。
+### 当前默认：前端连接独立 Docker API
+
+本次已创建被 Git 忽略的 `apps/web/.env.server.local`，配置 `CUTOUT_API_BASE_URL=http://127.0.0.1:3001`、`CUTOUT_API_USERNAME=admin` 和交付包的接口密码；不是 Bria Token。环境变量由网页启动进程读取，代理统一附加认证，浏览器不需要登录，也不接收接口密码。
+
+```powershell
+docker compose -f .tmp/releases/backend-20261028-v1/compose.yaml up -d
+npm run dev
+```
+
+打开 **http://localhost:8080**，对应 API 的默认 WEB_ORIGIN。不要改用 `127.0.0.1:8080`，除非同步修改 API 的 WEB_ORIGIN。初次在其他机器配置时，复制 `apps/web/server-config.template` 为 `apps/web/.env.server.local` 并填写接口密码；修改配置后重启前端。默认启动不再依赖本地 Worker/WASM/native 服务。下文是保留的旧开发入口。
+
+### 原 Cloudflare / 浏览器处理入口
+
+需要 Node.js 22.12+ 与 npm。此旧浏览器入口不代理 3001。
 
 ```powershell
 npm ci
@@ -34,13 +49,13 @@ npm run db:local -w apps/worker
 
 仅在不存在时，将 `apps/worker/config.template` 复制为 `apps/worker/.dev.vars`，填入开发环境变量。`DEV_AUTH=1` 仅对回环地址生效，公网请求仍要求有效会话（或所选 Access 模式的 JWT）；真实 Bria Token 会导致实际请求计费。
 
-Worker 开发脚本显式使用 `--local-upstream 127.0.0.1`，避免 Wrangler 从生产路由推导请求域名、导致本地免登录不生效。若 5174 已被其他项目占用，可用 `npm run dev -w apps/web -- --port 5175` 启动前端，再访问 `http://127.0.0.1:5175/`。
+Worker 开发脚本显式使用 `--local-upstream 127.0.0.1`，避免 Wrangler 从生产路由推导请求域名、导致本地免登录不生效。若 5174 已被其他项目占用，可用 `npm run dev:browser -w apps/web -- --port 5175` 启动旧前端，再访问 `http://127.0.0.1:5175/`。
 
 ```powershell
 # 终端 1：本地模拟 Worker、D1、R2
 npm run dev:worker
 # 终端 2：前端 http://localhost:5174
-npm run dev
+npm run dev:browser -w apps/web
 ```
 
 根目录 `.env.development` 的 `BRIA_TRANSPORT`、`CUTOUT_CLOUD_URL`、`CUTOUT_CLOUD_TOKEN` 属于旧 Node API 配置，新网页不读取这些凭据。
@@ -53,7 +68,7 @@ npm run dev
 npm run dev:local
 ```
 
-访问 `http://127.0.0.1:5175/`，顶部显示“本机 FFmpeg 导出模式”。该命令启动 Worker 8787、原生服务 3002 和前端 5175；不要与已占用这些端口的服务重复启动。已有 Worker 时可分别运行 `npm run dev:native` 和 `npm run dev -w apps/web -- --mode native --port 5175`。
+访问 `http://127.0.0.1:5175/`，顶部显示“本机 FFmpeg 导出模式”。该命令启动 Worker 8787、原生服务 3002 和前端 5175；不要与已占用这些端口的服务重复启动。已有 Worker 时可分别运行 `npm run dev:native` 和 `npm run dev:native -w apps/web`。
 
 刷新同一地址可继续使用原 IndexedDB 任务。已有失败任务点“恢复任务”，已有成片可换色重新导出，不需要再抠图。当前使用原生 CPU H.264 编码，未启用 GPU；原生服务不可用时明确报错，不自动改用 WASM。保持页面打开直到成片返回缓存，关闭页面可能使本机编码继续但无法接收成片，恢复时只重做本地导出。中转文件在正常请求结束或失败后清除；强制终止服务可能留下 `data/native` 临时文件。
 

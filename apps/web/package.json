@@ -4,10 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev:server": "vite --mode server --host localhost --port 8080",
+    "dev": "vite --mode server --host localhost --port 8080",
+    "dev:browser": "vite --host 127.0.0.1",
+    "dev:native": "vite --mode native --host 127.0.0.1 --port 5175",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
-    "predev": "node ../../scripts/prepare-wasm.mjs",
+    "build:server": "tsc -p tsconfig.json --noEmit && vite build --mode server",
+    "predev:browser": "node ../../scripts/prepare-wasm.mjs",
+    "predev:native": "node ../../scripts/prepare-wasm.mjs",
     "prebuild": "node ../../scripts/prepare-wasm.mjs"
   },
   "dependencies": {

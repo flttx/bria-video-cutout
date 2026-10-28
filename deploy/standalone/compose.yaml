@@ -1,0 +1,32 @@
+name: bria-cutout-server
+services:
+  api:
+    image: bria-cutout-api:RELEASE_TAG
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    environment:
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
+    ports: ['127.0.0.1:3001:3001']
+    volumes:
+      - media:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: 2
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, node, --input-type=module, -e, "import './apps/api/dist/env.js'; fetch('http://127.0.0.1:3001/api/health',{headers:{Authorization:'Basic '+Buffer.from('admin:'+process.env.CUTOUT_API_PASSWORD).toString('base64')}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+volumes:
+  media:
