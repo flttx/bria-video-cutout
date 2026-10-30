@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile, utimes } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from '../apps/api/src/app.js';
 import { Pipeline } from '../apps/api/src/pipeline.js';
@@ -105,6 +105,34 @@ test('lost submit response and restart reconcile external ID without a second pa
   f.empty=false;f.downloadFail=true;const restarted=new Pipeline(f.store,f.bria,5,30000,{},undefined,f.kling);await restarted.initialize();await restarted.idle();
   assert.equal((await f.store.get<ImageVideoRecord>('image-videos',id)).requestId,'kling-test');assert.equal(f.videos,1);
   f.downloadFail=false;await restarted.imageVideos.start(id);await restarted.idle();assert.equal((await f.store.get<ImageVideoRecord>('image-videos',id)).state,'completed');assert.equal(f.videos,1);assert.equal(f.whites,1);
+});
+
+test('white-image download progress stays visible while blocked; failure and resume reuse the paid Bria task',async t=>{
+  const {f,engine,app,id}=await setup(t),originalDownload=f.bria.download;
+  let entered!:()=>void,release!:()=>void;
+  const downloading=new Promise<void>(resolve=>{entered=resolve;});
+  const blocked=new Promise<void>(resolve=>{release=resolve;});t.after(()=>release());
+  f.bria.download=async(_url,file)=>{
+    await writeFile(file+'.part',Buffer.alloc(1024));
+    const old=new Date(Date.now()-90000);await utimes(file+'.part',old,old);
+    entered();await blocked;throw new Error('private-download-url');
+  };
+  await engine.imageVideos.start(id);await downloading;
+  const read=async()=>(await app.inject({url:`/api/image-videos/${id}`,headers})).json();
+  const progress=await read();
+  assert.equal(progress.state,'whitening');assert.equal(progress.whitening.state,'downloading');
+  assert.equal(progress.whitening.providerStatus,'COMPLETED');assert.ok(progress.whitening.lastCheckedAt);
+  assert.equal(progress.whitening.downloadedBytes,1024);assert.equal(progress.whitening.stalled,true);
+  assert.equal(f.whites,1);assert.equal(f.videos,0);
+  assert.doesNotMatch(JSON.stringify(progress),/private-download|requestId|image_url|\.part/);
+  await writeFile(f.store.path('images',id,'alpha.png.part'),Buffer.alloc(2048));
+  const moving=await read();assert.equal(moving.whitening.downloadedBytes,2048);assert.equal(moving.whitening.stalled,false);
+  release();await engine.idle();
+  const failed=await read();assert.equal(failed.state,'failed');assert.equal(failed.canResume,true);assert.equal(f.videos,0);
+  f.bria.download=originalDownload;
+  await engine.imageVideos.start(id);await engine.idle();
+  const done=await read();assert.equal(done.state,'completed');assert.equal(done.whitening,undefined);
+  assert.equal(f.whites,1,'resuming downloads never resubmits Bria');assert.equal(f.videos,1);
 });
 
 test('Kling preflight, Bria-only input, terminal failure and region changes cannot create extra paid work',async t=>{

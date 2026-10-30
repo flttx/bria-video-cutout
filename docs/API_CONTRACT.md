@@ -2,6 +2,13 @@
 
 ## 独立服务端接入（2026-10-28，工程契约）
 
+### 结果下载与图片阶段（2026-10-30，工程约定）
+
+- 图片状态增加 `downloading`。`GET /api/images/:id` 返回 `updatedAt`、`providerStatus`、`lastCheckedAt`；这些字段说明平台查询与本地阶段，不代表下载完成。
+- `GET /api/image-videos/:id` 及列表在 `state=whitening` 时附加 `whitening`：`state/updatedAt/providerStatus/lastCheckedAt`，临时文件存在时包含 `downloadedBytes/lastProgressAt`，60 秒无数据标记 `stalled=true`。不返回文件路径、平台任务号或结果签名地址，不虚构百分比。旧服务缺少该对象时网页保留原状态提示。
+- 共用结果文件下载器（Bria 图片/视频、Tripo 图片、可灵成片）对连接超时、连接重置和连续 120 秒无数据进行有限重连，最多 3 次 GET，总下载预算 10 分钟，失败后允许按原任务恢复。每次重新下载完整文件并原子替换；不对鉴权、过期、尺寸超限或文件写入错误重试，不重新提交 AI 生成。
+- 图片→可灵整条链路仍单进程串行；`queued` 表示等待前序图片或视频任务结束，不能视为 Bria 平台已受理。上述时间和重连次数均为工程选择。
+
 独立 API 镜像供单独网页和 APP 调用，不包含网页。使用下文 `/api/*` 业务端点，接口认证为 `Authorization: Basic base64(admin:接口密码)`，接口密码见私有交付文件，与 Bria Token 无关。Bria Token 只在服务端使用。按用户要求，APP 可内置接口凭据，网页通过启动配置读取，自动附加认证头，无需用户登录。客户端内置凭据可被提取；它拥有该单人服务的调用权限。
 
 网页来源由 WEB_ORIGIN 精确配置；允许 GET/POST/OPTIONS，预检无需登录，业务接口全部要求认证。CORS 允许 Authorization、Content-Type、X-Cutout-Client、X-Video-Filename、Range，暴露 Content-Disposition、Content-Length、Content-Range、Accept-Ranges。原生 APP 不要求 Origin；如果发送 Origin 则必须匹配。POST 必须带 X-Cutout-Client: 1，浏览器 POST 必须有匹配来源。未认证返回 401，来源或客户端标记错误返回 403。

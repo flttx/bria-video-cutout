@@ -5,6 +5,7 @@ $releaseDir = Join-Path $repoRoot ".tmp/releases/$tag"
 $tokenFile = Join-Path $repoRoot ".tmp/$tag.env"
 [IO.File]::WriteAllText($tokenFile,'BRIA_API_TOKEN=synthetic-package-token')
 $global:releaseTestCalls = [Collections.Generic.List[object]]::new()
+function Get-FileHash { throw 'Get-FileHash is intentionally unavailable in this packaging regression.' }
 
 # Synthetic Docker only: verify packaging boundaries without building or deploying images.
 function docker {
@@ -34,7 +35,8 @@ try {
     if ($login -notmatch 'Password: [a-f0-9]{64}' -or $login -match 'synthetic-package-token') { throw 'Missing login or exposed Bria token' }
     $secretArg = $global:releaseTestCalls[1] | Where-Object { $_ -like 'id=api_config,src=*' }
     if (Test-Path -LiteralPath ($secretArg -replace '^id=api_config,src=','')) { throw 'Temporary private configuration was not removed' }
-    $sum = (Get-FileHash -LiteralPath (Join-Path $releaseDir 'images.tar')).Hash.ToLowerInvariant()
+    $sum = & node --input-type=module -e "import {readFileSync} from 'node:fs'; import {createHash} from 'node:crypto'; console.log(createHash('sha256').update(readFileSync(process.argv[1])).digest('hex'));" (Join-Path $releaseDir 'images.tar')
+    if ($LASTEXITCODE -ne 0) { throw 'Independent checksum verification failed' }
     if ([IO.File]::ReadAllText((Join-Path $releaseDir 'SHA256SUMS')).Trim() -ne "$sum  images.tar") { throw 'Invalid artifact checksum' }
     if ($global:releaseTestCalls.Count -ne 3 -or $compose -match 'bria-cutout-web') { throw 'Expected exactly one backend build and export' }
     $before = $global:releaseTestCalls.Count

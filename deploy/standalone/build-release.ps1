@@ -37,7 +37,12 @@ try {
     [IO.File]::WriteAllText((Join-Path $releaseDir 'compose.yaml'),$compose)
     Copy-Item -LiteralPath (Join-Path $privateDir 'PRIVATE_ACCESS.txt') -Destination $releaseDir
     [IO.File]::Copy((Join-Path $PSScriptRoot 'DEPLOY.md'),(Join-Path $releaseDir 'DEPLOY.md'))
-    $hash = (Get-FileHash -LiteralPath (Join-Path $releaseDir 'images.tar') -Algorithm SHA256).Hash.ToLowerInvariant()
+    # Windows PowerShell hosts may not expose Get-FileHash. Stream the archive
+    # through .NET so large packages do not need to be loaded into memory.
+    $archiveStream = [IO.File]::OpenRead((Join-Path $releaseDir 'images.tar'))
+    $archiveHasher = [Security.Cryptography.SHA256]::Create()
+    try { $hash = [BitConverter]::ToString($archiveHasher.ComputeHash($archiveStream)).Replace('-', '').ToLowerInvariant() }
+    finally { $archiveHasher.Dispose(); $archiveStream.Dispose() }
     [IO.File]::WriteAllText((Join-Path $releaseDir 'SHA256SUMS'),"$hash  images.tar`n")
     # This marker is written last; failed builds/exports cannot look like a complete release.
     [IO.File]::WriteAllText((Join-Path $releaseDir 'RELEASE.txt'),"Tag: $Tag`nPlatform: $Platform`nImage: bria-cutout-api:$Tag`n")

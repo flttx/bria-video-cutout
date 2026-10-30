@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, copyFile, access, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, copyFile, access, writeFile, readFile, utimes, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
@@ -15,8 +15,12 @@ await command('ffmpeg',['-y','-f','lavfi','-i','color=c=0x64748b:s=360x640,forma
 await command('ffmpeg',['-y','-i',source,'-vf','colorkey=0x64748b:0.1:0.0','-frames:v','1',alpha]);
 await command('ffmpeg',['-y','-f','lavfi','-i','color=white:s=1080x1920:r=24:d=6,drawbox=x=300:y=500:w=480:h=900:color=0xff6b35:t=fill','-an','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p',generatedVideo]);
 let submissions=0,klingSubmissions=0,hold=true,klingHold=true,klingQueued=true,videoPosts=0,whiteReads=0;
+let releaseDownload;const downloadGate=new Promise(resolve=>{releaseDownload=resolve;});
 const gateway={imageForeground:async()=>{submissions++;return {request_id:'synthetic-image-browser'};},
-  status:async()=>({status:hold?'IN_PROGRESS':'COMPLETED',result:{image_url:'https://example.invalid/signed-image'}}),download:async(_url,file)=>copyFile(alpha,file),
+  status:async()=>({status:hold?'IN_PROGRESS':'COMPLETED',result:{image_url:'https://example.invalid/signed-image'}}),download:async(_url,file)=>{
+    await writeFile(file+'.part',Buffer.alloc(1048576));const old=new Date(Date.now()-90000);await utimes(file+'.part',old,old);
+    await downloadGate;await copyFile(alpha,file);await rm(file+'.part',{force:true});
+  },
   upload:async()=>{throw new Error('unexpected video upload');},autoForeground:async()=>{throw new Error('unexpected video call');},
   maskByPrompt:async()=>{throw new Error('unexpected mask');},maskByPoints:async()=>{throw new Error('unexpected mask');}};
 const kling={region:'china',submit:async file=>{assert.ok(file.endsWith('kling-input.png'));klingSubmissions++;return 'kling_'+klingSubmissions;},
@@ -52,12 +56,15 @@ try{
  await page.getByLabel('选择图片文件').setInputFiles({name:'bad.txt',mimeType:'text/plain',buffer:Buffer.from('not an image')});
  await page.getByRole('alert').filter({hasText:'请选择不超过'}).waitFor();assert.equal(submissions,0);
  await page.getByLabel('选择图片文件').setInputFiles(source);
- await page.getByRole('status').filter({hasText:'Bria 正在生成白底图片'}).waitFor();assert.equal(videoPosts,1,'upload automatically starts once despite lost response');
+ await page.getByRole('status').filter({hasText:'Bria 正在处理图片'}).waitFor();assert.equal(videoPosts,1,'upload automatically starts once despite lost response');
  assert.equal(await page.getByAltText('白底处理结果').count(),0);assert.equal(await page.getByRole('link',{name:'下载白底 PNG'}).count(),0);
  assert.equal(await page.getByRole('button',{name:'生成白底图片',exact:true}).count(),0);assert.equal(await page.getByLabel('处理 API').count(),0);
  await page.screenshot({path:resolve(root,'processing-desktop.png'),fullPage:true});
  await page.reload();await page.getByRole('button',{name:'图片白底',exact:true}).click();await page.locator('.image-white-history summary').click();await page.locator('.image-white-history button').first().click();
- hold=false;await page.getByRole('status').filter({hasText:'可灵平台排队中'}).waitFor();
+ hold=false;await page.getByRole('status').filter({hasText:'Bria 已完成，正在下载透明图片'}).waitFor();
+ await page.getByText('已下载 1.00 MiB',{exact:false}).waitFor();await page.getByRole('status').filter({hasText:'超过 60 秒未收到新数据'}).waitFor();
+ assert.equal(klingSubmissions,0);await page.screenshot({path:resolve(root,'white-download-stalled.png'),fullPage:true});
+ releaseDownload();await page.getByRole('status').filter({hasText:'可灵平台排队中'}).waitFor();
  assert.equal(await page.getByRole('button',{name:'平台排队中…',exact:true}).isDisabled(),true);
  await page.getByText('最近确认平台状态：',{exact:false}).waitFor();
  await page.screenshot({path:resolve(root,'kling-queued.png'),fullPage:true});
@@ -99,4 +106,4 @@ try{
  await writeFile(resolve(root,'result.json'),JSON.stringify({status:'passed',submissions,klingSubmissions,videoPosts,whiteReads,errors,forbidden,viewports:[320,390,768,1440],ratio:'9:16 inline and dialog',providers:'mocked'},null,2));
  console.log(`PASS: automatic upload -> Bria -> Kling; no intermediate image; lost-response/reload/cache safety; 9:16 playback and modal at four widths; keyboard/focus and download. Providers mocked. Evidence: ${root}`);
 }catch(error){if(page)await page.screenshot({path:resolve(root,'failure.png'),fullPage:true});console.error('Evidence: '+root);throw error;}
-finally{hold=false;klingHold=false;klingQueued=false;await browser?.close();await new Promise(resolve=>server?server.httpServer.close(resolve):resolve());await engine.idle();await app.close();}
+finally{hold=false;releaseDownload();klingHold=false;klingQueued=false;await browser?.close();await new Promise(resolve=>server?server.httpServer.close(resolve):resolve());await engine.idle();await app.close();}

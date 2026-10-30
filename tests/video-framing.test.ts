@@ -25,7 +25,7 @@ test('video framing uses the complete motion envelope with one scale, preserves 
   await command('ffmpeg',['-y',...rawInput,'-vf','alphaextract','-c:v','libx264','-crf','0','-pix_fmt','yuv420p',mask]);
   const sourceMeta=await probe(source,true);
   for(const kind of ['alpha','mask'] as const){
-    const output=resolve(root,`${kind}.mp4`),result=await render(source,kind==='alpha'?alpha:mask,kind,output,{color:'White',resolution:'source',framing:'subject'},sourceMeta);
+    const output=resolve(root,`${kind}-framed.mp4`),result=await render(source,kind==='alpha'?alpha:mask,kind,output,{color:'White',resolution:'source',framing:'subject'},sourceMeta);
     assert.deepEqual(result.composition?.bounds,{x:20,y:50,width:114,height:210});
     assert.equal(result.meta.width,width);assert.equal(result.meta.height,height);assert.equal(result.meta.frames,12);assert.equal(result.meta.fps,6);assert.equal(result.meta.hasAudio,true);
     const target=result.composition!.target;

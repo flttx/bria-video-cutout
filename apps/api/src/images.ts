@@ -26,12 +26,14 @@ function providerName(value:unknown):ImageProvider {
 export interface ImageRecord {
   id:string;filename:string;meta:ImageMeta;createdAt:string;updatedAt:string;
   sourceId?:string;provider?:ImageProvider;region?:TripoRegion;model?:string;fileToken?:string;outputMeta?:ImageMeta;
-  state:'uploaded'|'queued'|'submitting'|'processing'|'composing'|'completed'|'failed';
+  state:'uploaded'|'queued'|'submitting'|'processing'|'downloading'|'composing'|'completed'|'failed';
+  providerStatus?:string;lastCheckedAt?:string;
   requestId?:string;submissionAttempted?:boolean;artifactReady?:boolean;
   error?:{code:string;message:string};canResume?:boolean;
 }
 export function imageView(item:ImageRecord) {
   return {id:item.id,sourceId:item.sourceId??item.id,provider:item.provider??'bria',filename:item.filename,meta:item.meta,outputMeta:item.outputMeta,state:item.state,createdAt:item.createdAt,
+    updatedAt:item.updatedAt,providerStatus:item.providerStatus,lastCheckedAt:item.lastCheckedAt,
     error:item.error,canResume:item.canResume??false,sourceUrl:`/api/images/${item.sourceId??item.id}/source`,
     downloadUrl:item.state==='completed'?`/api/images/${item.id}/file`:undefined};
 }
@@ -81,6 +83,20 @@ export class ImagePipeline {
   constructor(readonly store:Store,private readonly bria:BriaGateway|undefined,private readonly pollMs=5000,private readonly timeout=600000,private readonly tripo?:TripoImageGateway) {}
   get providers() {return {bria:!!this.bria?.imageForeground&&this.bria.kind!=='cloud',tripo:!!this.tripo};}
   get available() {return this.providers.bria||this.providers.tripo;}
+  async progress(id:string) {
+    const item=await this.get(id);
+    let state=item.state,downloadedBytes:number|undefined,lastProgressAt:string|undefined;
+    // Read the actual partial file; no fake percentages or per-chunk database writes.
+    if(state==='processing'||state==='downloading') {
+      try {
+        const file=await stat(this.store.path('images',id,'alpha.png.part'));
+        state='downloading';downloadedBytes=file.size;lastProgressAt=file.mtime.toISOString();
+      }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    }
+    return {state,updatedAt:item.updatedAt,providerStatus:item.providerStatus,lastCheckedAt:item.lastCheckedAt,
+      downloadedBytes,lastProgressAt,
+      stalled:state==='downloading'&&Date.now()-Date.parse(lastProgressAt??item.updatedAt)>60000};
+  }
   async get(id:string,provider?:ImageProvider):Promise<ImageRecord> {
     const item=await this.store.get<ImageRecord>('image-jobs',validId(id));
     if(!provider||provider===(item.provider??'bria'))return item;
@@ -147,10 +163,12 @@ export class ImagePipeline {
         for(;;) {
           if(Date.now()>until)throw new AppError('IMAGE_POLL_TIMEOUT','图片处理等待超时，可继续查询原任务。',504);
           const status=await gateway.status(item.requestId);
+          item.providerStatus=status.status;item.lastCheckedAt=new Date().toISOString();await this.save(item);
           if(status.status==='ERROR')throw new AppError('IMAGE_UPSTREAM_FAILED','图片平台处理失败，请检查素材或账号服务。',422);
           if(status.status==='UNKNOWN')throw new AppError('IMAGE_STATUS_UNKNOWN','图片平台暂时无法确认任务状态，可稍后继续查询。',502);
           if(status.status==='COMPLETED') {
             if(!status.result?.image_url)throw new AppError('IMAGE_RESULT_MISSING','图片结果缺少文件地址。',502);
+            item.state='downloading';await this.save(item);
             await gateway.download(status.result.image_url,alpha,RESULT_MAX_BYTES);
             // Validate the downloaded image now; whiteImage also checks alpha and geometry before export.
             await imageMeta(alpha);item.artifactReady=true;await this.save(item);break;

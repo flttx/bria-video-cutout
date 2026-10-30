@@ -137,7 +137,9 @@ async function videoSubjectBounds(artifact:string,kind:"mask"|"alpha",artifactMe
   // Decode every frame. A union of all alpha extents keeps one fixed transform,
   // including brief gestures at the beginning/end; no temporal sampling or tracking.
   const matte=kind==="mask"?`scale=${width}:${height},format=gray`:`format=rgba,scale=${width}:${height},setsar=1,format=rgba,alphaextract`;
-  const report=await ffmpeg([...(kind==="alpha"&&artifactMeta.codec==="vp9"?["-c:v","libvpx-vp9"]:[]),...input(artifact),"-vf",`${orient}${matte},bbox=min_val=0,metadata=mode=print:file=-`,"-an","-f","null","-"]);
+  // bbox on FFmpeg 5 negotiates YUV from gray. Explicit full range keeps a zero
+  // alpha at zero instead of legal-range black (16), which looks nonempty.
+  const report=await ffmpeg([...(kind==="alpha"&&artifactMeta.codec==="vp9"?["-c:v","libvpx-vp9"]:[]),...input(artifact),"-vf",`${orient}${matte},scale=in_range=full:out_range=full,format=yuv444p,bbox=min_val=0,metadata=mode=print:file=-`,"-an","-f","null","-"]);
   let left=width,top=height,right=-1,bottom=-1;
   for(const frame of report.split(/frame:\d+/)){
     const values=Object.fromEntries([...frame.matchAll(/lavfi\.bbox\.(x1|x2|y1|y2|w|h)=(\d+)/g)].map(m=>[m[1]!,Number(m[2])]));

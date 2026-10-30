@@ -52,21 +52,38 @@ export async function uploadFile(file:string,grant:Pick<UploadGrant,"upload_url"
 export async function downloadFile(url:string,file:string,transport:typeof fetch=fetch,maxBytes=4_000_000_000):Promise<void> {
   const started=Date.now();
   const temp=file+".part";
-  try {
+  const deadline=AbortSignal.timeout(600000);
+  // Only retry an existing result GET. Never retry a paid submission here.
+  for(let attempt=0;;attempt++) {
+    const idle=new AbortController();
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const touch=()=>{clearTimeout(timer);timer=setTimeout(()=>idle.abort(new DOMException('Download stalled','TimeoutError')),120000);timer.unref();};
+    const signal=AbortSignal.any([deadline,idle.signal]);
+    touch();
+    try {
     let current=url;
     let response:Response|undefined;
     for(let i=0;i<4;i++) {
-      response=await transport(await trustedMediaUrl(current),{redirect:"manual",signal:AbortSignal.timeout(600000)});
+      response=await transport(await trustedMediaUrl(current),{redirect:"manual",signal});
       if(response.status>=300 && response.status<400 && response.headers.get("location")) { current=new URL(response.headers.get("location")!,current).href; await response.body?.cancel(); continue; }
       break;
     }
     if(response?.status===401||response?.status===403||response?.status===404||response?.status===410)throw new AppError("RESULT_EXPIRED","Bria 结果不可访问或已过期，请核对原任务；不会自动重新抠图。",410);
     if(!response?.ok || !response.body) throw new AppError("RESULT_DOWNLOAD","Bria 结果下载失败，可恢复任务重新获取。",502);
     let size=0;
-    const limit=new Transform({transform(chunk:Buffer,_encoding,callback){size+=chunk.length;callback(size>maxBytes ? new AppError("RESULT_TOO_LARGE","结果文件超过本地下载保护上限。",413):null,chunk);}});
-    await pipeline(Readable.fromWeb(response.body),limit,createWriteStream(temp,{mode:0o600}));
+    touch();
+    const limit=new Transform({transform(chunk:Buffer,_encoding,callback){touch();size+=chunk.length;callback(size>maxBytes ? new AppError("RESULT_TOO_LARGE","结果文件超过本地下载保护上限。",413):null,chunk);}});
+    await pipeline(Readable.fromWeb(response.body),limit,createWriteStream(temp,{mode:0o600}),{signal});
     await rename(temp,file);
-  } catch(e) { await rm(temp,{force:true}); if(e instanceof AppError) throw e; throw new BriaCallError("RESULT_DOWNLOAD","Bria 结果下载中断，可恢复任务重新获取。",{operation:'media_download',stage:'network',elapsedMs:Date.now()-started,networkCode:safeNetworkCode(e)}); }
+    return;
+    } catch(e) {
+      await rm(temp,{force:true});
+      if(e instanceof AppError)throw e;
+      const networkCode=safeNetworkCode(e);
+      if(attempt<2&&!deadline.aborted&&(idle.signal.aborted||['UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET','ECONNRESET','ETIMEDOUT','EAI_AGAIN'].includes(networkCode??'')))continue;
+      throw new BriaCallError("RESULT_DOWNLOAD","结果下载连接中断，已停止等待；可恢复原任务重新下载，不会重复生成。",{operation:'media_download',stage:'network',elapsedMs:Date.now()-started,networkCode});
+    } finally {clearTimeout(timer);}
+  }
 }
 export class BriaClient extends BriaHttpClient implements BriaGateway {
   constructor(token:string,private readonly mediaTransport:typeof fetch=fetch) {super(token,mediaTransport);}

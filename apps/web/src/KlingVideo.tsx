@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { api, apiUrl, ApiError } from './api';
 import PortraitVideo from './PortraitVideo';
 
-interface VideoItem {id:string;state:string;videoUrl?:string;canResume:boolean;providerStatus?:string;lastCheckedAt?:string;error?:{code?:string;message:string};meta?:{width:number;height:number;duration:number}}
-const labels:Record<string,string>={queued:'等待生成',whitening:'1/3 · Bria 正在生成白底图片',submitting:'2/3 · 正在提交可灵',processing:'2/3 · 可灵正在生成旋转视频',downloading:'3/3 · 正在保存并校验视频',completed:'视频已完成',failed:'视频生成未完成'};
+interface VideoItem {id:string;state:string;videoUrl?:string;canResume:boolean;providerStatus?:string;lastCheckedAt?:string;whitening?:{state:string;downloadedBytes?:number;lastProgressAt?:string;lastCheckedAt?:string;stalled:boolean};error?:{code?:string;message:string};meta?:{width:number;height:number;duration:number}}
+const labels:Record<string,string>={queued:'等待前序图片或视频任务完成',whitening:'1/3 · Bria 正在生成白底图片',submitting:'2/3 · 正在提交可灵',processing:'2/3 · 可灵正在生成旋转视频',downloading:'3/3 · 正在保存并校验视频',completed:'视频已完成',failed:'视频生成未完成'};
+const whiteLabels:Record<string,string>={uploaded:'1/3 · 准备处理图片',queued:'1/3 · 图片处理排队中',submitting:'1/3 · 正在提交 Bria',processing:'1/3 · Bria 正在处理图片',downloading:'1/3 · Bria 已完成，正在下载透明图片',composing:'1/3 · 正在合成白底图片',completed:'1/3 · 白底已完成，正在准备可灵参考图',failed:'1/3 · 图片处理已停止，正在同步任务状态'};
 const active=(item:VideoItem|null)=>!!item&&!['completed','failed'].includes(item.state);
 interface Props {imageId?:string;imageReady:boolean;autoStart:boolean;blocked:boolean;enabled:boolean|undefined;briaEnabled:boolean;onActivity:(value:boolean)=>void}
 export default function KlingVideo({imageId,imageReady,autoStart,blocked,enabled,briaEnabled,onActivity}:Props){
@@ -46,7 +47,8 @@ export default function KlingVideo({imageId,imageReady,autoStart,blocked,enabled
   }
   const waiting=item?.state==='processing'&&item.providerStatus==='submitted';
   const uncertainWhite=item?.state==='failed'&&item.error?.code==='BRIA_WHITE_UNCERTAIN';
-  const status=item?.state==='processing'?(waiting?'2/3 · 可灵平台排队中，等待开始生成':item.providerStatus==='processing'?labels.processing:'2/3 · 正在查询可灵任务状态'):
+  const white=item?.state==='whitening'?item.whitening:undefined;
+  const status=white?(whiteLabels[white.state]??labels.whitening):item?.state==='processing'?(waiting?'2/3 · 可灵平台排队中，等待开始生成':item.providerStatus==='processing'?labels.processing:'2/3 · 正在查询可灵任务状态'):
     uncertainWhite?'Bria 提交结果待核对，视频尚未开始生成':item?.state==='failed'&&item.canResume&&item.error?.code==='KLING_CONNECTION'?'可灵状态查询中断，请恢复查询原任务':item?labels[item.state]:'';
   return <section className="image-white-card kling-video" aria-label="可灵白底旋转视频">
     <h3>视频结果</h3>
@@ -57,6 +59,9 @@ export default function KlingVideo({imageId,imageReady,autoStart,blocked,enabled
     </div>
     {!enabled&&<p className="helper">{enabled===undefined?'当前服务未启用可灵视频，请更新服务端。':'可灵服务未配置，已有视频仍可播放和下载。'}</p>}
     <p className="helper" role="status">{loading?'正在查询视频任务…':item?status:autoStart?'正在准备生成视频…':'上传新图片后自动生成；历史任务只查询已有结果。'}</p>
+    {white?.state==='downloading'&&<p className="helper">{white.downloadedBytes===undefined?'正在连接图片下载服务':`已下载 ${(white.downloadedBytes/1024/1024).toFixed(2)} MiB`}{white.lastProgressAt?` · 最后收到数据：${new Date(white.lastProgressAt).toLocaleString('zh-CN',{hour12:false})}`:''}</p>}
+    {white?.stalled&&<p className="error-text" role="status">图片下载超过 60 秒未收到新数据，服务器会有限重连，失败后可恢复原任务。尚未提交可灵，请勿重复上传。</p>}
+    {white?.lastCheckedAt&&<p className="helper">最近确认图片平台状态：{new Date(white.lastCheckedAt).toLocaleString('zh-CN',{hour12:false})}</p>}
     {item?.lastCheckedAt&&<p className="helper">最近确认平台状态：{new Date(item.lastCheckedAt).toLocaleString('zh-CN',{hour12:false})}</p>}
     {(error||item?.error)&&<p className="error-text" role="alert">{error||item?.error?.message}</p>}
     {item?.meta&&<p className="helper">{item.meta.width} × {item.meta.height} · {item.meta.duration} 秒</p>}

@@ -1,5 +1,41 @@
 # PROGRESS
 
+## 下载恢复修复提交归档（2026-10-30）
+
+- 本次提交包含结果下载有限重连、图片阶段与停滞反馈、Linux FFmpeg 构图兼容修复、Windows 打包校验兼容修复，以及对应测试和部署文档。下方“未提交/推送”描述保留为当时的阶段记录。
+- 提交前 API/Web 构建、20 项专项测试和真实浏览器集成已通过；私有镜像 `backend-20261030-download-v3` 已部署 healthy，真实下载哈希和网页视频 Range 206 验证通过。本地环境文件、密钥、任务数据、诊断证据及私有镜像包不纳入 Git。
+- 最新视频任务 `2d7cae1a-0fee-45ea-6512-53ca9b04d077` 于北京时间 20:42:50 完成，13 秒、1280×720、30fps，成片读取 206；手机页面状态映射和刷新行为未修改，也未验证。
+
+## 服务器结果下载停滞与阶段反馈修复（2026-10-30）
+
+- [x] 原图片 `798e2c8c-6d1c-4c48-bc97-e2a1e6ba87aa` 在 Bria 已完成后卡在下载；日志记录 `ECONNRESET`（约 362 秒）和 `UND_ERR_CONNECT_TIMEOUT`。同一约 4.98 MB 文件的本机/服务器新连接实测约 2.2/2.3 秒，完整 SHA-256 一致；本机虚拟 DNS/TUN 与服务器直连路由不同，但未证明具体故障网络节点。证据 `.tmp/bria-download-check/full-result.json`。
+- [x] 20:16:34 仅重启原 API 容器重建连接，保留镜像、数据和 Bria 任务号；20:16:40 图片完成，后续进入原用户要求的可灵生成。新任务 `b516376c-a5a1-43fe-ac3c-4f0973375fbb` 在整条链路串行队列等待，尚未提交 Bria。诊断未新建 AI 任务，恢复后继续执行用户原请求。
+- [x] 共用下载器加入流读取超时：连续 120 秒无数据或已识别的瞬态网络错误仅重连结果 GET，最多 3 次、总预算 10 分钟；鉴权/过期/超限/写盘错误不重试，AI POST 不重发。图片持久化下载阶段与平台确认时间，网页展示真实文件大小、最后收到数据时间、60 秒停滞提示及前序任务排队原因。
+- [x] API/Web 构建、20 项图片/可灵/下载/安全诊断测试通过；浏览器集成通过，覆盖阻塞下载可见、未提前提交可灵、丢响应恢复、9:16 播放/下载和不显示中间图。证据 `.tmp/images-browser/102b0eb0-61af-42d0-b879-8c621f3ba57b/`，停滞截图已查看。上游测试模拟，实际网络故障消除不由模拟测试保证。
+- [x] 修复镜像 `backend-20261030-download-v3` 已更新至公司服务器并 healthy；沿用原接口密码、28084 回环端口和持久卷，停机一致备份校验通过，Nginx 哈希及其他容器启动时间不变。切换镜像前两条用户任务均已完成，原 Bria 任务号保留；浏览器经本地代理读取两条视频均返回 Range 206/100 字节。新容器实际下载同一 4.98 MB 结果耗时约 1.95 秒且哈希一致；这是当次成功，不代表网络永久稳定。证据 `.tmp/download-fix-deploy/verification.json`。
+- [x] 新私有包 `.tmp/releases/backend-20261030-download-v3/`，镜像包 279143424 字节，SHA-256 `7e934a306466c6c60ead416fc3bde99ca5d27228a723174d6e30ee66843f7c01`；镜像内 Node 22 连接重置恢复验证通过。修复已部署但本轮未提交或推送；后续任务仍按原有整条流程串行处理。
+
+## 本地前端连接公司服务器（2026-10-30）
+
+- [x] 按用户要求，将 Git 忽略的 `apps/web/.env.server.local` 切为 `CUTOUT_API_BASE_URL=http://10.28.111.20`、`CUTOUT_API_PATH_PREFIX=/bria-cutout`，使用当前服务器认证；密码仅由本地 Vite 代理加载，不暴露给浏览器。旧配置保存在忽略目录 `.tmp/frontend-remote/web.env.before`。
+- [x] 当前 `http://localhost:8080` 已生效。真实 Chrome 通过前端代理验证健康 200、可灵启用、服务器历史 4 条、服务器已有合成视频读取 200、预览 Range 206/100 字节；代理上传/下载路径回归通过。证据 `.tmp/frontend-remote/verification.json`，零次新增付费生成。
+- [x] 后续在项目根目录执行 `npm run dev` 即可启动本地前端，使用已部署后端，无需启动本地 API。本机旧任务未迁移到服务器，本次未修改服务器镜像、提交或推送。
+
+## 公司服务器 API 更新完成（2026-10-30）
+
+- [x] 用户明确要求部署到 `jupiterdev@10.28.111.20:22`。实际核对旧容器 healthy、无活动任务，上传 `backend-20261030-framing-v2` 并校验 SHA-256，通过 `docker load` 导入；新 Compose 位于 `/home/jupiterdev/services/bria-video-cutout/backend-20261030-framing-v2/`。
+- [x] 切换前备份 Compose、Nginx 配置、其他容器启动时间；停止本 API 后对 `bria-cutout-server_media` 制作约 64 MiB 一致备份并校验。新服务沿用同一 Compose 项目、数据卷、回环 `127.0.0.1:28084` 和 Nginx `/bria-cutout/api/`。旧镜像/配置保留可回滚；`runtime.env` 保留原接口密码且权限 600，未要求现有客户端换密码。
+- [x] 新版容器 healthy；从本机通过真实公司网关验证匿名 401、错误 Origin 403、正确认证 200、图片/可灵配置能力、历史记录、合成视频上传、FFmpeg 预览、Range 206、原文件逐字节下载及模型接口 404。合成上传 ID `273e63c6-7881-42fe-aa4a-8a2b27dc388d`；证据 `.tmp/remote-deploy-framing/verification.json`。
+- [x] Nginx 配置哈希不变，其余容器启动时间逐项相同，数据备份校验通过。零次新增 Bria/Tripo/可灵收费生成；健康/入口验证不证明平台网络与额度。本机前端代理和 Node 服务配置未切换，本轮兼容性修复与部署文档尚未另行提交/推送。
+
+## 最新 API 镜像包交付（2026-10-30）
+
+- [x] 输出 `backend-20261030-framing-v2`，`linux/amd64`，目录 `.tmp/releases/backend-20261030-framing-v2/`，共 6 个运行文件。仅含 API、FFmpeg 和私有配置，不含网页、模型渲染或本机任务数据；镜像 `bria-cutout-api:backend-20261030-framing-v2`。
+- [x] `images.tar` 为 279142400 字节，SHA-256 `1d5d2af2780db5615d1f8f7b3ebd4599779959e075792d01fa6e2fbc5ab41b1c`；独立 Node 流式哈希与包内校验值一致。实际 `docker load`、Compose 配置和隔离端口 33001 启动通过，容器 healthy，非 root、鉴权 401/403/200、无网页/模型接口均通过。
+- [x] 打包时发现 Windows PowerShell 缺少 Get-FileHash，脚本改用 .NET 流式 SHA-256；模拟缺失 cmdlet 的打包回归通过。第一版 `backend-20261030-framing-d4b984f` 未完成发布标记且验证未通过，不作交付。
+- [x] Linux FFmpeg 5 的 bbox 自动灰度转 YUV 会把透明零值转换成 16，导致旧扫描误判全画面；显式采用 full-range YUV 后，Linux 实际 Alpha/Mask 活动并集均精确匹配，音轨/帧数和图片构图 v2 通过。Windows 构图回归和 API 构建通过，修正测试文件名以免覆盖原 Mask 素材。验证记录 `.tmp/release-check-d4b984f/result.json`。
+- [x] 镜像包含已推送的 d4b984f 功能及本轮兼容性修复；本轮修复源码/文档尚未另行提交或推送。没有新增付费调用、远端部署或更改当前 Node/网页运行配置。平台网络与额度、目标服务器实际部署及设备播放不在本次验证范围。
+
 ## 视频抠图统一主体构图（2026-10-30）
 
 - [x] 当前独立服务端网页增加默认开启的“主体统一构图（居中偏下）”，高级设置可切换，完成后可复用缓存重新导出。自动模式开启时保留 Alpha，Mask 同样支持；新参数/导出版本持久化，旧任务默认参数兼容，直接背景视频明确拒绝，不自动重新计费。

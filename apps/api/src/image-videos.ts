@@ -29,6 +29,9 @@ export class ImageVideoPipeline {
   private active=new Set<string>();
   constructor(readonly store:Store,private readonly images:ImagePipeline,private readonly kling?:KlingGateway,private readonly pollMs=5000,private readonly timeout=1800000){}
   get available(){return !!this.kling;}
+  async view(item:ImageVideoRecord){
+    return {...imageVideoView(item),whitening:item.state==='whitening'?await this.images.progress(item.id):undefined};
+  }
   async idle(){await this.queue;}
   private async save(item:ImageVideoRecord){item.updatedAt=new Date().toISOString();await this.store.save('image-videos',item);}
   private enqueue(id:string){
@@ -120,9 +123,9 @@ export class ImageVideoPipeline {
   }
 }
 export function registerImageVideoRoutes(app:FastifyInstance,engine:ImageVideoPipeline){
-  app.post('/api/image-videos',async(request,reply)=>reply.code(202).send(imageVideoView(await engine.start(validId(object(request.body).imageId)))));
-  app.get('/api/image-videos',async()=> (await engine.store.list<ImageVideoRecord>('image-videos')).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,20).map(imageVideoView));
-  app.get<{Params:{id:string}}>('/api/image-videos/:id',async request=>imageVideoView(await engine.store.get<ImageVideoRecord>('image-videos',validId(request.params.id))));
+  app.post('/api/image-videos',async(request,reply)=>reply.code(202).send(await engine.view(await engine.start(validId(object(request.body).imageId)))));
+  app.get('/api/image-videos',async()=>Promise.all((await engine.store.list<ImageVideoRecord>('image-videos')).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,20).map(item=>engine.view(item))));
+  app.get<{Params:{id:string}}>('/api/image-videos/:id',async request=>engine.view(await engine.store.get<ImageVideoRecord>('image-videos',validId(request.params.id))));
   app.get<{Params:{id:string};Querystring:{download?:string}}>('/api/image-videos/:id/file',async(request,reply)=>{
     const item=await engine.store.get<ImageVideoRecord>('image-videos',validId(request.params.id));
     if(item.state!=='completed')throw new AppError('KLING_VIDEO_NOT_READY','视频尚未生成完成。',409);
