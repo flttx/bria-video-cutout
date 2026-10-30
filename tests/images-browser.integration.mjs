@@ -19,7 +19,7 @@ const gateway={imageForeground:async()=>{submissions++;return {request_id:'synth
   status:async()=>({status:hold?'IN_PROGRESS':'COMPLETED',result:{image_url:'https://example.invalid/signed-image'}}),download:async(_url,file)=>copyFile(alpha,file),
   upload:async()=>{throw new Error('unexpected video upload');},autoForeground:async()=>{throw new Error('unexpected video call');},
   maskByPrompt:async()=>{throw new Error('unexpected mask');},maskByPoints:async()=>{throw new Error('unexpected mask');}};
-const kling={region:'china',submit:async file=>{assert.ok(file.endsWith('white.png'));klingSubmissions++;return 'kling_'+klingSubmissions;},
+const kling={region:'china',submit:async file=>{assert.ok(file.endsWith('kling-input.png'));klingSubmissions++;return 'kling_'+klingSubmissions;},
   query:async id=>({id,status:klingQueued?'submitted':klingHold?'processing':'succeeded',url:'https://example.invalid/private-kling'}),download:async(_url,file)=>copyFile(generatedVideo,file)};
 const engine=new Pipeline(new Store(resolve(root,'data')),gateway,20,60000,{},undefined,kling);
 const token='synthetic-images-browser-password',origin='http://127.0.0.1:5197';

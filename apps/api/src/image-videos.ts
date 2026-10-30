@@ -4,6 +4,8 @@ import { mkdir, rename, rm, stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AppError, object, publicError } from './errors.js';
 import type { ImagePipeline, ImageRecord } from './images.js';
+import { frameKlingImage } from './image-framing.js';
+import type { ImageFraming } from './image-framing.js';
 import { KLING_DURATION, KLING_MODEL, KLING_PROMPT } from './kling.js';
 import type { KlingGateway, KlingRegion, KlingTask } from './kling.js';
 import { command } from './media.js';
@@ -15,6 +17,7 @@ export interface ImageVideoRecord {
   state:'queued'|'whitening'|'submitting'|'processing'|'downloading'|'completed'|'failed';
   region:KlingRegion;model:string;externalId:string;requestId?:string;submissionAttempted?:boolean;prompt?:string;
   providerStatus?:KlingTask['status'];lastCheckedAt?:string;
+  framing?:ImageFraming;
   canResume:boolean;error?:{code:string;message:string};meta?:{width:number;height:number;duration:number};
 }
 export function imageVideoView(item:ImageVideoRecord){return {id:item.id,filename:item.filename,state:item.state,createdAt:item.createdAt,
@@ -76,7 +79,8 @@ export class ImageVideoPipeline {
             await delay(this.pollMs);
           }
         }
-        const file=this.store.path('images',id,'white.png');
+        const file=this.store.path('images',id,'kling-input.png');
+        item.framing=await frameKlingImage(this.store.path('images',id,'alpha.png'),file);
         if((await stat(file)).size>50_000_000)throw new AppError('KLING_IMAGE_SIZE','白底图片超过可灵 50 MB 输入上限。',413);
         // Persist BEFORE networking. A lost response is reconciled by external ID, never resubmitted.
         item.state='submitting';item.submissionAttempted=true;item.prompt=KLING_PROMPT;await this.save(item);
@@ -109,7 +113,7 @@ export class ImageVideoPipeline {
         await delay(this.pollMs);
       }
     }catch(error){
-      item.state='failed';item.error=publicError(error);item.canResume=!['KLING_TASK_FAILED','KLING_VIDEO_INVALID','KLING_IMAGE_SIZE'].includes(item.error.code);
+      item.state='failed';item.error=publicError(error);item.canResume=!['KLING_TASK_FAILED','KLING_VIDEO_INVALID','KLING_IMAGE_SIZE','IMAGE_SUBJECT_EMPTY','IMAGE_FRAMING_INVALID'].includes(item.error.code);
       if(!item.submissionAttempted){const source:ImageRecord=await this.images.get(id);if(source.state==='failed'&&!source.canResume)item.canResume=false;}
       await this.save(item);
     }

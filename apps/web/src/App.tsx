@@ -341,7 +341,7 @@ export default function App() {
           <div className="divider" />
           <div className="control-group source-export-spec" aria-live="polite"><span className="section-label">导出规格</span><p>{exportMeta ? `${Math.ceil(exportMeta.width / 2) * 2} × ${Math.ceil(exportMeta.height / 2) * 2} · 跟随原视频` : "选择视频后显示尺寸"}</p><p className="helper">尺寸、比例和帧率跟随原视频，导出 MP4 / H.264。{exportMeta && (exportMeta.width % 2 || exportMeta.height % 2) ? "为兼容编码，奇数边长会补齐 1 像素。" : ""}</p></div>
           </fieldset>
-          {!flow.editingResult && mode === "auto" && <details className="advanced-options" data-tour="cache"><summary>高级设置</summary>{flow.options}</details>}
+          {(serverEnabled || !flow.editingResult && mode === "auto") && <details className="advanced-options" data-tour="cache" open={serverEnabled}><summary>高级设置</summary>{flow.options}</details>}
           {flow.actions}
         </aside>
 

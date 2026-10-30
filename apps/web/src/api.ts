@@ -32,7 +32,7 @@ export async function previewVideo(id:string) {
 export interface JobInput {
   id:string; videoId:string; mode:"auto"|"prompt"|"points"; prompt:string;
   points:{x:number;y:number;type:"positive"|"negative";atSeconds:number}[];
-  start:number;end:number;reusable:boolean;color:string;resolution:string;
+  start:number;end:number;reusable:boolean;color:string;resolution:string;framing?:"subject"|"original";
 }
 export interface Job {
   id:string;state:string;input:JobInput;exportId?:string;canResume:boolean;reusable:boolean;
@@ -44,7 +44,7 @@ export interface Job {
   filename?:string;videoDuration?:number;
 }
 export interface ExportResult {
-  id:string;state:string;color:string;resolution:string;downloadUrl?:string;bytes?:number;
+  id:string;state:string;color:string;resolution:string;framing?:"subject";downloadUrl?:string;bytes?:number;
   meta?:{width:number;height:number;duration:number;fps:number;hasAudio:boolean};
   error?:{code:string;message:string};
 }

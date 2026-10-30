@@ -131,7 +131,26 @@ export async function validateArtifact(file:string,source:VideoMeta,kind:"mask"|
   }
   return meta;
 }
-export async function render(source:string,artifact:string,kind:"mask"|"alpha"|"direct",output:string,options:ExportOptions,sourceMeta:VideoMeta):Promise<{meta:VideoMeta;bytes:number;route:ExportRecord["route"]}> {
+async function videoSubjectBounds(artifact:string,kind:"mask"|"alpha",artifactMeta:VideoMeta,sourceMeta:VideoMeta,orient:string) {
+  const width=kind==="mask"?sourceMeta.width:orient?artifactMeta.height:artifactMeta.width;
+  const height=kind==="mask"?sourceMeta.height:orient?artifactMeta.width:artifactMeta.height;
+  // Decode every frame. A union of all alpha extents keeps one fixed transform,
+  // including brief gestures at the beginning/end; no temporal sampling or tracking.
+  const matte=kind==="mask"?`scale=${width}:${height},format=gray`:`format=rgba,scale=${width}:${height},setsar=1,format=rgba,alphaextract`;
+  const report=await ffmpeg([...(kind==="alpha"&&artifactMeta.codec==="vp9"?["-c:v","libvpx-vp9"]:[]),...input(artifact),"-vf",`${orient}${matte},bbox=min_val=0,metadata=mode=print:file=-`,"-an","-f","null","-"]);
+  let left=width,top=height,right=-1,bottom=-1;
+  for(const frame of report.split(/frame:\d+/)){
+    const values=Object.fromEntries([...frame.matchAll(/lavfi\.bbox\.(x1|x2|y1|y2|w|h)=(\d+)/g)].map(m=>[m[1]!,Number(m[2])]));
+    if(!values.w||!values.h)continue;
+    const {x1,x2,y1,y2}=values;
+    if(x1===undefined||x2===undefined||y1===undefined||y2===undefined||x1>x2||y1>y2||x2>=width||y2>=height)throw new AppError('FRAMING_INVALID','视频主体范围解析失败，已停止导出。',422);
+    left=Math.min(left,x1);top=Math.min(top,y1);right=Math.max(right,x2);bottom=Math.max(bottom,y2);
+  }
+  if(right<left)throw new AppError('VIDEO_SUBJECT_EMPTY','整段抠图结果没有可见主体，已停止导出。',422);
+  return {x:left,y:top,width:right-left+1,height:bottom-top+1};
+}
+export async function render(source:string,artifact:string,kind:"mask"|"alpha"|"direct",output:string,options:ExportOptions,sourceMeta:VideoMeta):Promise<{meta:VideoMeta;bytes:number;route:ExportRecord["route"];composition?:ExportRecord['composition']}> {
+  if(options.framing==='subject'&&kind==='direct')throw new AppError('FRAMING_REQUIRES_ALPHA','统一主体构图需要透明视频或 Mask，不能使用已合成背景的视频。',422);
   const width=options.resolution==="source"?Math.ceil(sourceMeta.width/2)*2:options.resolution==="4K"?3840:2560;
   const height=options.resolution==="source"?Math.ceil(sourceMeta.height/2)*2:options.resolution==="4K"?2160:1440;
   const color=COLORS.find(c=>c.name===options.color)!.hex.replace("#","0x");
@@ -139,6 +158,7 @@ export async function render(source:string,artifact:string,kind:"mask"|"alpha"|"
   const rotation=artifactRotation(artifactMeta,sourceMeta),orient=rotation===90?'transpose=cclock,':rotation===270?'transpose=clock,':'';
   const temp=output+".part.mp4";
   let route:ExportRecord["route"];
+  let composition:ExportRecord['composition'];
   try {
     if(kind==="direct" && artifactMeta.width===width && artifactMeta.height===height && artifactMeta.codec==="h264" && artifactMeta.pixelFormat==="yuv420p" && artifactMeta.hasAudio===sourceMeta.hasAudio && Math.abs(artifactMeta.fps-sourceMeta.fps)<.0001) {
       await copyFile(artifact,temp); route="direct_bria_mp4";
@@ -152,8 +172,19 @@ export async function render(source:string,artifact:string,kind:"mask"|"alpha"|"
       } else {
         args=[...(kind==="alpha"&&artifactMeta.codec==="vp9"?["-c:v","libvpx-vp9"]:[]),...input(artifact),...input(source)];
         const aligned=`settb=expr=1/${sourceMeta.fps},setpts=N`;
-        const foreground=kind==="mask" ? `[0:v]${orient}${aligned},scale=${sourceMeta.width}:${sourceMeta.height},format=gray[mask];[1:v]${aligned},format=rgba[rgb];[rgb][mask]alphamerge=shortest=1[fg];` : `[0:v]${orient}${aligned},format=rgba[fg];`;
-        filter=foreground+`[fg]${fit}[fit];color=c=${color}:s=${width}x${height}:r=${sourceMeta.fps}:d=${sourceMeta.duration}[bg];[bg][fit]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1:format=auto,format=yuv420p[out]`;
+        const alphaSize=options.framing==='subject'?`,scale=${orient?artifactMeta.height:artifactMeta.width}:${orient?artifactMeta.width:artifactMeta.height},setsar=1,format=rgba`:'';
+        const foreground=kind==="mask" ? `[0:v]${orient}${aligned},scale=${sourceMeta.width}:${sourceMeta.height},format=gray[mask];[1:v]${aligned},format=rgba[rgb];[rgb][mask]alphamerge=shortest=1[fg];` : `[0:v]${orient}${aligned},format=rgba${alphaSize}[fg];`;
+        let subjectFit=fit,position='x=(W-w)/2:y=(H-h)/2';
+        if(options.framing==='subject'){
+          const bounds=await videoSubjectBounds(artifact,kind,artifactMeta,sourceMeta,orient);
+          // Same user-approved area as image framing v2; scale the whole motion envelope.
+          const factor=Math.min(width*.66/bounds.width,height*.58/bounds.height);
+          const w=Math.max(1,Math.floor(bounds.width*factor)),h=Math.max(1,Math.floor(bounds.height*factor));
+          const x=Math.round(width*.5-w/2),y=Math.round(height*.59-h/2);
+          subjectFit=`crop=${bounds.width}:${bounds.height}:${bounds.x}:${bounds.y},scale=${w}:${h}:flags=lanczos,setsar=1`;
+          position=`x=${x}:y=${y}`;composition={version:1,bounds,target:{x,y,width:w,height:h}};
+        }
+        filter=foreground+`[fg]${subjectFit}[fit];color=c=${color}:s=${width}x${height}:r=${sourceMeta.fps}:d=${sourceMeta.duration}[bg];[bg][fit]overlay=${position}:shortest=1:format=auto,format=yuv420p[out]`;
         route=kind==="mask"?"mask_composite":"alpha_composite";
       }
       // Convert sample values as well as signaling: -pix_fmt alone can retain full-range yuvj420p.
@@ -163,6 +194,6 @@ export async function render(source:string,artifact:string,kind:"mask"|"alpha"|"
     const meta=await probe(temp,true);
     if(meta.width!==width || meta.height!==height || meta.codec!=="h264" || meta.pixelFormat!=="yuv420p" || meta.hasAudio!==sourceMeta.hasAudio || Math.abs(meta.fps-sourceMeta.fps)>.05 || Math.abs(meta.duration-sourceMeta.duration)>Math.max(.15,2/sourceMeta.fps) || meta.frames!==sourceMeta.frames) throw new AppError("EXPORT_QA_FAILED","导出文件未通过尺寸、编码、音轨或帧率/帧数校验，未标记为完成。",422);
     await rename(temp,output);
-    return {meta,bytes:(await stat(output)).size,route};
+    return {meta,bytes:(await stat(output)).size,route,...(composition?{composition}:{})};
   } catch(e) {await rm(temp,{force:true});throw e;}
 }

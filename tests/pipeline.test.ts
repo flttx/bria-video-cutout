@@ -51,6 +51,23 @@ test('server validates limits and same-frame points before calling Bria',async()
   assert.equal(parseJob({...input,resolution:undefined},video.meta).resolution,'source');
   assert.equal(bria.submissions,0);
 });
+
+test('subject framing persists, requires alpha, and cache re-exports never resubmit Bria',async()=>{
+  const {engine,input,bria,store,video}=await fixture();
+  assert.throws(()=>parseJob({...input,framing:'invalid'},video.meta),/构图/);
+  const request={...input,mode:'auto',framing:'subject',reusable:false};
+  const job=await engine.create(request);assert.equal(job.input.reusable,true);await engine.idle();
+  const saved=await store.get<JobRecord>('jobs',job.id);assert.equal(saved.state,'completed',JSON.stringify(saved.error));assert.equal(saved.artifact,'alpha');
+  const first=await store.get<ExportRecord>('exports',job.id);assert.equal(first.framing,'subject');assert.ok(first.composition);
+  const id=randomUUID();await engine.createExport(job.id,{id,color:'Blue'});await engine.idle();
+  const next=await store.get<ExportRecord>('exports',id);assert.equal(next.state,'completed');assert.equal(next.framing,'subject');assert.deepEqual(next.composition,first.composition);
+  await assert.rejects(engine.createExport(job.id,{id,color:'Blue',framing:'original'}),/导出标识/);
+  const originalId=randomUUID();await engine.createExport(job.id,{id:originalId,color:'White',framing:'original'});await engine.idle();
+  assert.equal((await store.get<ExportRecord>('exports',originalId)).composition,undefined);assert.equal(bria.submissions,1);
+  // Existing direct artifacts cannot silently trigger a fresh paid cutout.
+  saved.artifact='direct';saved.input.framing=undefined;await store.save('jobs',saved);
+  await assert.rejects(engine.createExport(job.id,{id:randomUUID(),color:'White',framing:'subject'}),/透明缓存/);assert.equal(bria.submissions,1);
+});
 test('mask pipeline, duplicate POST, audio, background recolor and validated export',async()=>{
   const {engine,input,bria,store,video}=await fixture();
   const [a,b]=await Promise.all([engine.create(input),engine.create(input)]);assert.equal(a.id,b.id);

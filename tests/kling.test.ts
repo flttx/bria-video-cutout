@@ -26,8 +26,8 @@ async function fixture(){
   const store=new Store(resolve(root,'data'));
   const kling:KlingGateway={region:'china',submit:async(file,external)=>{
     videos++;assert.match(external,/^white-/);const id=external.slice(6);
-    assert.deepEqual(await readFile(file),await readFile(store.path('images',id,'white.png')));
-    assert.notDeepEqual(await readFile(file),await readFile(source),'Kling receives Bria white output, not original');
+    assert.deepEqual(await readFile(file),await readFile(store.path('images',id,'kling-input.png')));
+    assert.notDeepEqual(await readFile(file),await readFile(source),'Kling receives the normalized Bria cutout, not original');
     if(submitFail)throw new Error('private key or url');return 'kling-test';
   },query:async(value,external)=>{queries++;assert.equal(value,external?value:'kling-test');if(empty)return;return {id:'kling-test',status:upstreamFailed?'failed':'succeeded',url:'https://example.invalid/signed-video'};},download:async(_url,file)=>{if(downloadFail)throw new Error('private-download');await copyFile(video,file);}};
   return {root,source,video,store,bria,kling,get whites(){return whites;},get videos(){return videos;},get queries(){return queries;},set downloadFail(v:boolean){downloadFail=v;},set submitFail(v:boolean){submitFail=v;},set empty(v:boolean){empty=v;},set upstreamFailed(v:boolean){upstreamFailed=v;}};
@@ -85,6 +85,9 @@ test('Bria to Kling pipeline deduplicates, saves real video, enforces auth and c
   const starts=await Promise.all([1,2,3].map(()=>app.inject({method:'POST',url:'/api/image-videos',headers,payload:{imageId:id}})));assert.ok(starts.every(r=>r.statusCode===202));await engine.idle();
   const done=(await app.inject({url:`/api/image-videos/${id}`,headers})).json();assert.equal(done.state,'completed',JSON.stringify(done));assert.equal(f.whites,1);assert.equal(f.videos,1);assert.deepEqual(done.meta,{width:1080,height:1920,duration:6});
   assert.equal(done.providerStatus,'succeeded');assert.equal(stage,3);
+  const recorded=await f.store.get<ImageVideoRecord>('image-videos',id);
+  assert.equal(recorded.framing?.version,2);assert.equal(recorded.framing?.height,1920);
+  assert.match(recorded.prompt??'',/lower-middle/);
   assert.ok(!/externalId|requestId|signed-video|submissionAttempted|private/.test(JSON.stringify(done)));
   const file=await app.inject({url:done.videoUrl+'?download=1',headers});assert.deepEqual(file.rawPayload,await readFile(f.video));assert.match(String(file.headers['content-disposition']),/^attachment/);
   const range=await app.inject({url:done.videoUrl,headers:{...headers,range:'bytes=0-99'}});assert.equal(range.statusCode,206);assert.equal(range.rawPayload.length,100);
@@ -123,4 +126,13 @@ test('Bria uncertain submission blocks Kling and cannot be resubmitted by video 
   assert.equal(failed.error?.code,'BRIA_WHITE_UNCERTAIN');assert.match(failed.error.message,/未取得任务号/);
   assert.doesNotMatch(failed.error.message,/private-bria-detail|请查看图片错误并恢复原任务/);
   await assert.rejects(engine.imageVideos.start(id));assert.equal(attempts,1);
+});
+
+test('an empty Bria cutout stops before any Kling submission',async t=>{
+  const {f,engine,id}=await setup(t);
+  f.bria.download=async(_url,file)=>{await command('ffmpeg',['-y','-f','lavfi','-i','color=white@0:s=360x640,format=rgba','-frames:v','1',file]);};
+  await engine.imageVideos.start(id);await engine.idle();
+  const failed=await f.store.get<ImageVideoRecord>('image-videos',id);
+  assert.equal(failed.error?.code,'IMAGE_SUBJECT_EMPTY');assert.equal(failed.canResume,false);
+  assert.equal(failed.submissionAttempted,undefined);assert.equal(f.videos,0);assert.equal(f.whites,1);
 });

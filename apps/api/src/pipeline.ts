@@ -114,13 +114,15 @@ export class Pipeline {
   }
   async createExport(jobId:string,value:unknown):Promise<ExportRecord> {
     return this.exclusive(async()=>{
-      const v=object(value),id=validId(v.id),options=exportOptions(v);
+      const v=object(value),id=validId(v.id);
       const job=await this.store.get<JobRecord>("jobs",validId(jobId));
+      const options=exportOptions({...v,framing:v.framing??job.input.framing});
       if(!job.artifactReady||!job.sourceMeta||job.state!=="completed")throw new AppError("NOT_READY","请等待当前处理完成后再导出。",409);
+      if(job.artifact==="direct"&&options.framing==="subject")throw new AppError("FRAMING_REQUIRES_ALPHA","此任务没有透明缓存，无法统一主体构图。可保留原构图导出；重新抠图须新建任务。",409);
       if(job.artifact==="direct"&&options.color!==job.input.color)throw new AppError("COLOR_REQUIRES_AI","此任务未缓存透明结果。更换颜色需新建抠图任务；可重复换色模式可避免后续重复调用 Bria。",409);
       try {
         const existing=await this.store.get<ExportRecord>("exports",id);
-        if(existing.jobId!==jobId||existing.color!==options.color||existing.resolution!==options.resolution)throw new AppError("ID_CONFLICT","导出标识已用于其他参数。",409);
+        if(existing.jobId!==jobId||existing.color!==options.color||existing.resolution!==options.resolution||existing.framing!==options.framing)throw new AppError("ID_CONFLICT","导出标识已用于其他参数。",409);
         return existing;
       }catch(e){if(!(e instanceof AppError)||e.code!=="NOT_FOUND")throw e;}
       const item:ExportRecord={id,jobId,...options,state:"queued",createdAt:new Date().toISOString()};
@@ -202,7 +204,7 @@ export class Pipeline {
       }
       // Deterministic first-export ID makes crash recovery idempotent too.
       job.exportId=id;
-      const item:ExportRecord={id,jobId:id,color:job.input.color,resolution:job.input.resolution,state:"queued",createdAt:new Date().toISOString()};
+      const item:ExportRecord={id,jobId:id,color:job.input.color,resolution:job.input.resolution,...(job.input.framing?{framing:job.input.framing}:{}),state:"queued",createdAt:new Date().toISOString()};
       await this.store.save("exports",item);
       await this.state(job,"exporting");
       await this.renderExport(item);

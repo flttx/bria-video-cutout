@@ -12,7 +12,7 @@ export const VIDEO_UPLOAD_TYPES:Record<string,string>={mp4:"video/mp4",mov:"vide
 export interface VideoMeta { width: number; height: number; duration: number; fps: number; hasAudio: boolean; codec: string; pixelFormat: string; frames: number; alpha: boolean; uploadMediaType?:string; containerDuration?:number; rotation?:number; codedWidth?:number; codedHeight?:number }
 export interface VideoRecord { id: string; meta: VideoMeta; bytes: number; createdAt: string; filename?: string }
 export interface Point { x: number; y: number; type: PointType; atSeconds: number }
-export interface ExportOptions { color: ColorName; resolution: Resolution }
+export interface ExportOptions { color: ColorName; resolution: Resolution; framing?:"subject" }
 export interface JobInput extends ExportOptions {
   videoId: string; mode: CutoutMode; prompt: string; points: Point[];
   start: number; end: number; reusable: boolean;
@@ -34,6 +34,7 @@ export interface ExportRecord extends ExportOptions {
   createdAt: string; meta?: VideoMeta; bytes?: number;
   route?: "direct_bria_mp4" | "alpha_composite" | "mask_composite" | "transcode_only";
   error?: {code: string; message: string};
+  composition?: {version:number;bounds:{x:number;y:number;width:number;height:number};target:{x:number;y:number;width:number;height:number}};
 }
 export function validId(value: unknown): string {
   if (typeof value !== "string" || !ID_PATTERN.test(value)) throw new AppError("INVALID_ID", "任务或视频标识不正确。");
@@ -47,7 +48,8 @@ export function exportOptions(value: unknown): ExportOptions {
   if (v.resolution !== undefined && v.resolution !== "source") {
     throw new AppError("INVALID_EXPORT", "导出规格自动跟随原视频，不支持指定分辨率。请刷新页面后重试。");
   }
-  return { color: v.color as ColorName, resolution: "source" };
+  if(v.framing!==undefined&&v.framing!=="original"&&v.framing!=="subject")throw new AppError("INVALID_EXPORT","构图方式无效。");
+  return { color: v.color as ColorName, resolution: "source",...(v.framing==="subject"?{framing:"subject" as const}:{}) };
 }
 export function parseJob(value: unknown, meta: VideoMeta): JobInput {
   const v = object(value);
@@ -71,5 +73,5 @@ export function parseJob(value: unknown, meta: VideoMeta): JobInput {
     const frame = Math.floor((points[0]!.atSeconds-start)*meta.fps);
     if (points.some(p=>Math.floor((p.atSeconds-start)*meta.fps)!==frame)) throw new AppError("MIXED_FRAMES", "正负点必须属于同一帧，请清空后在暂停画面重新标注。");
   }
-  return {...options, videoId:validId(v.videoId),mode:v.mode,prompt:v.mode === "prompt" ? prompt : "",points,start,end,reusable:v.mode === "auto" ? v.reusable !== false : true};
+  return {...options, videoId:validId(v.videoId),mode:v.mode,prompt:v.mode === "prompt" ? prompt : "",points,start,end,reusable:options.framing==="subject"||v.mode!=="auto"||v.reusable!==false};
 }

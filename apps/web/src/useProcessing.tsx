@@ -27,6 +27,7 @@ const uploadVideo=importVideo;
 export default function useProcessing(props:Props) {
   const [start,setStart]=useState(0),[end,setEnd]=useState(0),[reusable,setReusable]=useState(true);
   const [clipEdited,setClipEdited]=useState(false);
+  const [subjectFraming,setSubjectFraming]=useState(serverEnabled);
   const [job,setJob]=useState<Job|null>(null),[output,setOutput]=useState<ExportResult|null>(null);
   const [pending,setPending]=useState<JobInput|null>(()=>{try{return JSON.parse(readStored(PENDING_JOB)??"null") as JobInput|null;}catch{return null;}});
   const [working,setWorking]=useState(false),[message,setMessage]=useState("");
@@ -46,8 +47,9 @@ export default function useProcessing(props:Props) {
   const busy=working || recovering || !!job&&!['completed','failed'].includes(job.state) || !!output&&!['completed','failed'].includes(output.state);
   const hasCompletedJob=job?.state==="completed";
   const editingResult=props.view==="result"&&hasCompletedJob;
-  const changed=!!output&&(props.color!==output.color||output.resolution!=="source");
+  const changed=!!output&&(props.color!==output.color||output.resolution!=="source"||serverEnabled&&(subjectFraming!==(output.framing==="subject")));
   const cannotRecolor=!!job&&!job.reusable&&props.color!==job.input.color;
+  const cannotFrame=serverEnabled&&subjectFraming&&!!job&&!job.reusable;
   const targetSpec=job?.sourceMeta ? `${job.sourceMeta.width} × ${job.sourceMeta.height}` : "原视频尺寸";
   const outputSpec=output?.meta ? `${output.meta.width} × ${output.meta.height}` : output?.resolution==="source" ? "原视频尺寸" : output?.resolution;
   const needsExport=output?.state!=="completed"||changed;
@@ -202,7 +204,7 @@ export default function useProcessing(props:Props) {
         catch(error){setUploadingTask(task=>task?{...task,state:"failed",error:error instanceof Error?error.message:"上传失败"}:task);return;}
       }
       if(!videoId)return;
-      try{await submit({id:crypto.randomUUID(),videoId,mode:props.mode,prompt:props.prompt,points:props.points,start,end:clipEnd,reusable,color:props.color,resolution:"source"});}
+      try{await submit({id:crypto.randomUUID(),videoId,mode:props.mode,prompt:props.prompt,points:props.points,start,end:clipEnd,reusable:serverEnabled&&subjectFraming||reusable,color:props.color,resolution:"source",...(serverEnabled?{framing:subjectFraming?"subject" as const:"original" as const}:{})});}
       catch(error){setUploadingTask(task=>task?{...task,state:"failed",error:error instanceof Error?error.message:"创建任务失败"}:task);throw error;}
     });
   }
@@ -235,7 +237,7 @@ export default function useProcessing(props:Props) {
   }
   async function retryExport(item:Job,attempt:ExportResult) {
     await action(async()=>{
-      const next=await api<ExportResult>(`/api/jobs/${item.id}/export`,{id:crypto.randomUUID(),color:attempt.color,resolution:"source"});
+      const next=await api<ExportResult>(`/api/jobs/${item.id}/export`,{id:crypto.randomUUID(),color:attempt.color,resolution:"source",...(serverEnabled?{framing:attempt.framing??"original"}:{})});
       setHistory(rows=>rows.map(row=>row.id===item.id?{...row,latestAttempt:next}:row));
       if(job?.id===item.id)setOutput(next);
       revealHistory();
@@ -249,13 +251,15 @@ export default function useProcessing(props:Props) {
     </fieldset>
   ) : null;
   const options = <fieldset className="processing-options export-options" disabled={busy}>
-      {props.mode==="auto"&&<label className="cache-choice"><input type="checkbox" checked={reusable} onChange={e=>setReusable(e.target.checked)}/>保留抠图缓存，方便后续换色</label>}
-      {props.mode==="auto"&&<p className="helper">缓存占用{serverEnabled?"服务器":"本机"}空间，换色时可直接导出。关闭后换色需重新调用 Bria。</p>}
+      {serverEnabled&&<label className="cache-choice"><input type="checkbox" checked={subjectFraming} onChange={e=>setSubjectFraming(e.target.checked)}/>主体统一构图（居中偏下）</label>}
+      {serverEnabled&&subjectFraming&&<p className="helper">按整段活动范围统一缩放，最大宽度 66%、高度 58%；保留动作和原视频尺寸。需要保留透明缓存。</p>}
+      {props.mode==="auto"&&<label className="cache-choice"><input type="checkbox" checked={serverEnabled&&subjectFraming||reusable} disabled={serverEnabled&&subjectFraming} onChange={e=>setReusable(e.target.checked)}/>保留抠图缓存，方便后续换色</label>}
+      {props.mode==="auto"&&<p className="helper">缓存占用{serverEnabled?"服务器":"本机"}空间，换色时可直接导出。{serverEnabled&&subjectFraming?"统一构图期间自动保留。":"关闭后换色需重新调用 Bria。"}</p>}
     </fieldset>;
   async function exportLocally() {
-    if(!job||!hasCompletedJob||!output||busy||cannotRecolor)return;
+    if(!job||!hasCompletedJob||!output||busy||cannotRecolor||cannotFrame)return;
     await action(async()=>{
-      const next=await api<ExportResult>(`/api/jobs/${job.id}/export`,{id:crypto.randomUUID(),color:props.color,resolution:"source"});
+      const next=await api<ExportResult>(`/api/jobs/${job.id}/export`,{id:crypto.randomUUID(),color:props.color,resolution:"source",...(serverEnabled?{framing:subjectFraming?"subject":"original"}:{})});
       setOutput(next);
       setHiddenHistoryIds(ids=>{const visible=new Set(ids);visible.delete(job.id);return visible;});
       setRemovedTask(item=>item?.id===job.id?null:item);
@@ -267,8 +271,8 @@ export default function useProcessing(props:Props) {
     <div className="action-panel">
       {editingResult ? <>
         {needsExport ? <>
-          <button className="primary-button full" disabled={busy||!output||!connected||cannotRecolor} onClick={()=>void exportLocally()}>{busy?`正在${processingPlace}导出…`:output?.state==="failed"?"重试导出":"应用修改并导出"}</button>
-          <p>{!connected?(serverEnabled?"处理服务未连接，请检查服务地址和启动配置。":"处理服务未连接，请检查网络或重新登录后重试。"):cannotRecolor?"此结果没有透明缓存，换色需要重新抠图。":`导出${props.colorLabel(props.color)} · ${targetSpec}，在${processingPlace}处理，不再提交 Bria。`}</p>
+          <button className="primary-button full" disabled={busy||!output||!connected||cannotRecolor||cannotFrame} onClick={()=>void exportLocally()}>{busy?`正在${processingPlace}导出…`:output?.state==="failed"?"重试导出":"应用修改并导出"}</button>
+          <p>{!connected?(serverEnabled?"处理服务未连接，请检查服务地址和启动配置。":"处理服务未连接，请检查网络或重新登录后重试。"):cannotFrame?"此结果没有透明缓存，请关闭主体统一构图；重新抠图需新建任务。":cannotRecolor?"此结果没有透明缓存，换色需要重新抠图。":`导出${props.colorLabel(props.color)} · ${targetSpec}，在${processingPlace}处理，不再提交 Bria。`}</p>
         </> : <p>导出完成，可预览或下载 MP4。</p>}
         <button className="outline-button full new-task-button" disabled={busy} onClick={props.onEditSource}>重新抠图</button>
       </> : <>
@@ -281,7 +285,7 @@ export default function useProcessing(props:Props) {
     {message&&<p className="error-text" role="alert">{message}</p>}
     {pending&&!busy&&<button className="outline-button" onClick={()=>void action(async()=>{try{const existing=await api<Job>(`/api/jobs/${pending.id}`);setJob(existing);setPending(null);store(PENDING_JOB,null);}catch(e){if(e instanceof ApiError&&e.status===404)await submit(pending);else throw e;}})}>恢复未确认的提交</button>}
   </section>;
-  const result = output&&<div className="result-panel"><h3>导出成品 · {props.colorLabel(output.color)} · {outputSpec}</h3>{output.state==="completed"&&changed&&<p className="pending-change" role="status">待应用：{props.colorLabel(props.color)} · {targetSpec}。当前预览和下载仍是{props.colorLabel(output.color)} · {outputSpec}。</p>}{output.state==="completed"&&output.downloadUrl?<><video key={output.id} src={apiUrl(output.downloadUrl)} controls preload="metadata" playsInline aria-label="导出成品预览"/><div className="result-info"><p className="helper">{output.meta?.width} × {output.meta?.height} · {output.meta?.duration.toFixed(2)} 秒 · {((output.bytes??0)/1024/1024).toFixed(1)} MB · {output.meta?.hasAudio?"含音轨":"无音轨"}</p><a className={`${changed?"outline-button":"primary-button"} download-link`} href={apiUrl(output.downloadUrl)} download="cutout.mp4">{changed?"下载当前成品":"下载 MP4"}</a></div></>:<div className="result-empty" role={output.state==="failed"?"alert":"status"}><p className={output.state==="failed"?"error-text":"helper"}>{output.state==="failed"?"暂未生成成品，请查看任务记录中的失败原因。":"成品生成后可在这里预览，请在任务记录中查看进度。"}</p></div>}</div>;
+  const result = output&&<div className="result-panel"><h3>导出成品 · {props.colorLabel(output.color)} · {outputSpec}</h3>{output.state==="completed"&&changed&&<p className="pending-change" role="status">待应用：{props.colorLabel(props.color)} · {targetSpec}{serverEnabled?subjectFraming?" · 主体统一构图":" · 原构图":""}。当前预览和下载仍是{props.colorLabel(output.color)} · {outputSpec}。</p>}{output.state==="completed"&&output.downloadUrl?<><video key={output.id} src={apiUrl(output.downloadUrl)} controls preload="metadata" playsInline aria-label="导出成品预览"/><div className="result-info"><p className="helper">{output.meta?.width} × {output.meta?.height} · {output.meta?.duration.toFixed(2)} 秒 · {((output.bytes??0)/1024/1024).toFixed(1)} MB · {output.meta?.hasAudio?"含音轨":"无音轨"}</p><a className={`${changed?"outline-button":"primary-button"} download-link`} href={apiUrl(output.downloadUrl)} download="cutout.mp4">{changed?"下载当前成品":"下载 MP4"}</a></div></>:<div className="result-empty" role={output.state==="failed"?"alert":"status"}><p className={output.state==="failed"?"error-text":"helper"}>{output.state==="failed"?"暂未生成成品，请查看任务记录中的失败原因。":"成品生成后可在这里预览，请在任务记录中查看进度。"}</p></div>}</div>;
   const visibleHistory=history.filter(row=>!hiddenHistoryIds.has(row.id));
   const historyView = <><details className="task-history" open={historyOpen} onToggle={event=>setHistoryOpen(event.currentTarget.open)} data-tour="task-history"><summary>任务记录（最近 50 条）</summary>{visibleHistory.length?<p className="helper">直接预览或下载成品；移除记录不会删除已保存的视频。</p>:<p className="helper">暂无任务。提交后可在这里查看进度，完成后预览和下载。</p>}
     <button className="outline-button" disabled={busy} onClick={()=>void refreshHistory()}>刷新记录</button>

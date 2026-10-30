@@ -59,17 +59,19 @@ R2 成功转交后删除对象；上传响应丢失或转交失败可重新上�
 | `POST /api/videos` | `application/octet-stream` 原始视频流；流式写盘后 FFprobe 校验 Bria 支持的容器/编码及本地帧率范围，201 返回 `id/meta/bytes/createdAt`。最大 1,000,000,000 字节 |
 | `POST /api/videos/:id/preview` | 为 AVI/GIF 或浏览器无法播放的已上传视频生成可播放的本地 H.264/AAC 预览；Bria 处理仍使用原文件 |
 | `GET /api/videos/:id/preview` | 返回本地兼容预览，支持 Range 请求；视频 ID 只解析到本地视频存储目录 |
-| `POST /api/jobs` | `{id,videoId,mode,prompt,points,start,end,reusable,color,resolution}`；202 返回本地任务视图。`id` 是客户端 UUID，同 ID 同参数复用原任务，参数冲突返回 409 |
+| `POST /api/jobs` | `{id,videoId,mode,prompt,points,start,end,reusable,color,resolution,framing?}`；202 返回本地任务视图。`id` 是客户端 UUID，同 ID 同参数复用原任务，参数冲突返回 409 |
 | `GET /api/jobs` | 最近 50 个本地任务；页面刷新后显示在任务记录中，不自动选中历史任务或恢复成品 |
 | `GET /api/jobs/:id` | 状态、参数快照、初次导出 ID、源片段 `sourceMeta{width,height,fps}`（准备完成后）、脱敏错误、`canResume`；没有虚构进度百分比 |
 | `POST /api/jobs/:id/resume` | 失败任务恢复。已有 Bria 请求只继续查询/下载；提交结果不明且无请求 ID 时拒绝自动重发 |
-| `POST /api/jobs/:id/export` | `{id,color,resolution}`，复用缓存做本地导出；直接有色视频改变颜色返回 409 |
+| `POST /api/jobs/:id/export` | `{id,color,resolution,framing?}`，复用缓存做本地导出；直接有色视频改变颜色或要求主体构图返回 409 |
 | `GET /api/exports/:id` | 导出状态、实际尺寸/帧率/时长/音轨、字节数、本地下载地址 |
 | `GET /api/exports/:id/file` | MP4 预览/下载，支持单段 Range；`?download=1` 返回附件下载。不允许读取未完成文件 |
 
 任务状态：`queued → preparing → uploading → submitting → processing → downloading → exporting → completed / failed`。本地作业串行执行以限制内存和外部并发；不是 Bria 的并发规定。
 
 导出状态：`queued → exporting → completed / failed`。只有 FFprobe 校验目标尺寸、H.264/yuv420p、音轨、帧率、时长与完整帧数后才标记完成。导出路径记录 `direct_bria_mp4 / alpha_composite / mask_composite / transcode_only`。
+
+**主体构图（工程规则）**：独立服务端接受 `framing:"subject"|"original"`；创建任务省略时保留旧行为，当前 server 网页默认发送 `subject`。开启后自动模式强制保留 Alpha（`reusable=true`），不采用直接背景成片；导出省略字段时继承任务构图，显式 `original` 可恢复原构图。同导出 ID 的构图参数冲突返回 409。逐帧扫描整段 Alpha/Mask 并取活动范围并集，统一等比放入宽 66%、高 58%、中心 (50%,59%) 的区域，画布沿用原片。导出记录 `composition{version,bounds,target}` 用于核对固定变换。全空结果返回 `VIDEO_SUBJECT_EMPTY`；直接有背景成片返回 `FRAMING_REQUIRES_ALPHA`，不自动触发收费重抠。该功能不修复上游抠图闪烁或原片已截断部位；运动范围大或误保留背景会使主体变小。旧浏览器/WASM 模式明确拒绝 `subject`，不伪装成功。
 
 ## 参数与恢复规则（工程选择）
 

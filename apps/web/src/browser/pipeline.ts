@@ -186,6 +186,7 @@ export async function browserApi(path:string,body?:unknown,signal?:AbortSignal):
   }
   if(path==='/api/jobs'&&body!==undefined) {
     const value=object(body),id=validId(value.id),video=await store.get<VideoRecord>('video/'+validId(value.videoId)),input=parseJob(body,video.meta);
+    if(input.framing==='subject')throw new AppError('FRAMING_SERVER_ONLY','主体统一构图请使用独立服务端模式。',422);
     try{const job=await store.get<BrowserJob>('job/'+id);if(JSON.stringify(job.input)!==JSON.stringify(input))throw new AppError('ID_CONFLICT','此任务标识已使用。',409);return jobView(job);}catch(error){if(!(error instanceof AppError)||error.code!=='NOT_FOUND')throw error;}
     const user=await identify(),now=new Date().toISOString();
     const job:BrowserJob={id,input,owner:user,state:'queued',createdAt:now,updatedAt:now,transport:'cloud'};
@@ -205,6 +206,7 @@ export async function browserApi(path:string,body?:unknown,signal?:AbortSignal):
     }
     if(match[2]==='export') {
       const value=object(body),options=exportOptions(body),exportId=validId(value.id);
+      if(options.framing==='subject')throw new AppError('FRAMING_SERVER_ONLY','主体统一构图请使用独立服务端模式。',422);
       if(job.state!=='completed'||!job.artifactReady)throw new AppError('NOT_READY','任务尚未完成。',409);
       if(job.artifact==='direct'&&options.color!==job.input.color)throw new AppError('NO_ALPHA','此结果没有透明缓存，换色需重新抠图。',409);
       const item:ExportRecord={...options,id:exportId,jobId:id,state:'queued',createdAt:new Date().toISOString()};

@@ -72,9 +72,15 @@ http { types { text/html html; text/css css; application/javascript js; } ${site
   await page.goto('http://127.0.0.1:5186');
   await page.getByText('服务器处理模式',{exact:true}).waitFor();
   await page.locator('input[type=file]').setInputFiles(source);
+  assert.equal(await page.getByRole('checkbox',{name:'主体统一构图（居中偏下）',exact:true}).isChecked(),true);
+  assert.equal(await page.getByRole('checkbox',{name:'保留抠图缓存，方便后续换色',exact:true}).isDisabled(),true);
+  await page.getByRole('checkbox',{name:'主体统一构图（居中偏下）',exact:true}).uncheck();
+  assert.equal(await page.getByRole('checkbox',{name:'保留抠图缓存，方便后续换色',exact:true}).isDisabled(),false);
+  await page.getByRole('checkbox',{name:'主体统一构图（居中偏下）',exact:true}).check();
   await page.getByRole('button',{name:'开始抠图并导出',exact:true}).click();
   for(let i=0;i<200&&submissions===0;i++)await delay(100);
   assert.equal(submissions,1);await page.close();hold=false;await engine.idle();
+  const [savedExport]=await engine.store.list('exports');assert.equal(savedExport.state,'completed');assert.equal(savedExport.framing,'subject');assert.ok(savedExport.composition);
   page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto('http://127.0.0.1:5186');
   await page.locator('.task-history summary').click();
