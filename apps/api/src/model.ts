@@ -1,5 +1,6 @@
 import { COLORS } from "./config.js";
 import { AppError, object } from "./errors.js";
+import type { BriaCallDiagnostic } from './bria/diagnostics.js';
 import type { CutoutMode, PointType } from "./config.js";
 
 export const MAX_BYTES = 1_000_000_000; // Conservative decimal GB for the documented 1 GB limit.
@@ -22,6 +23,8 @@ export interface JobRecord {
   requestId?: string; submissionAttempted?: boolean; sourceMeta?: VideoMeta;
   artifact?: "alpha" | "mask" | "direct"; artifactReady?: boolean; exportId?: string;
   error?: {code: string; message: string}; canResume?: boolean; warning?: string;
+  // Server-side only; jobView deliberately omits this diagnostic record.
+  lastFailure?: {stage:JobState;code:string;at:string;upstream?:BriaCallDiagnostic};
   removedAt?: string;
   transport?: "direct" | "cloud";
   cloudJobId?: string;

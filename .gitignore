@@ -3,6 +3,7 @@ dist/
 dist-server/
 .env
 .env.*
+!apps/api/.env.kling.example
 *.log
 coverage/
 data/

@@ -1,10 +1,9 @@
 param(
-    [Parameter(Mandatory=$true)]
     [ValidatePattern('^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$')]
-    [string]$Tag,
+    [string]$Tag = ('backend-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
     [ValidateSet('linux/amd64','linux/arm64')]
     [string]$Platform = 'linux/amd64',
-    [string]$TokenFile = '.env.development'
+    [string]$TokenFile = ''
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -22,7 +21,11 @@ try {
     # Fail before creating a release directory if Docker Desktop/Linux is unavailable.
     $serverOS = & docker version --format '{{.Server.Os}}' 2>$null
     if ($LASTEXITCODE -ne 0 -or $serverOS -ne 'linux') { throw 'Start Docker Desktop with the Linux engine before building a release.' }
-    & node deploy/standalone/prepare-private.mjs $privateDir $TokenFile
+    if ($TokenFile) {
+        & node deploy/standalone/prepare-private.mjs $privateDir $TokenFile
+    } else {
+        & node deploy/standalone/prepare-private.mjs $privateDir
+    }
     if ($LASTEXITCODE -ne 0) { throw 'Private configuration preparation failed.' }
     foreach ($target in @('api')) {
         # Secret contents do not invalidate BuildKit cache: always rebuild private layers.
@@ -33,7 +36,7 @@ try {
     $compose = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'compose.yaml')).Replace('RELEASE_TAG',$Tag)
     [IO.File]::WriteAllText((Join-Path $releaseDir 'compose.yaml'),$compose)
     Copy-Item -LiteralPath (Join-Path $privateDir 'PRIVATE_ACCESS.txt') -Destination $releaseDir
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/镜像交付与启动命令.md') -Destination (Join-Path $releaseDir 'DEPLOY.md')
+    [IO.File]::Copy((Join-Path $PSScriptRoot 'DEPLOY.md'),(Join-Path $releaseDir 'DEPLOY.md'))
     $hash = (Get-FileHash -LiteralPath (Join-Path $releaseDir 'images.tar') -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText((Join-Path $releaseDir 'SHA256SUMS'),"$hash  images.tar`n")
     # This marker is written last; failed builds/exports cannot look like a complete release.

@@ -8,6 +8,8 @@ import { command } from "./media.js";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { tripoSettings } from './tripo.js';
+import { klingSettings } from './kling.js';
 
 try {
   const deployment=deploymentSettings(process.env);
@@ -18,7 +20,8 @@ try {
     const check=join(DATA_DIR,`.write-check-${randomUUID()}`);
     await writeFile(check,"",{flag:"wx",mode:0o600});await unlink(check);
   }
-  const engine=new Pipeline(new Store(DATA_DIR),settings.selected,5000,1_800_000,settings.gateways);
+  const tripo=tripoSettings(process.env);
+  const engine=new Pipeline(new Store(DATA_DIR),settings.selected,5000,1_800_000,settings.gateways,tripo,klingSettings(process.env));
   const app=await createServer(engine,!!settings.selected,process.env.WEB_ORIGIN,settings.checkService,deployment.access);
   await engine.initialize();
   await app.listen({port:deployment.port,host:deployment.host});

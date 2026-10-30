@@ -13,6 +13,8 @@ import { compatiblePreview, createThumbnail, probe } from "./media.js";
 import { Pipeline, jobView, exportView } from "./pipeline.js";
 import { verifyProxyToken, verifyBasicAuth } from "./deployment.js";
 import type { ServerAccess } from "./deployment.js";
+import { registerImageRoutes } from './images.js';
+import { registerImageVideoRoutes } from './image-videos.js';
 
 export async function createServer(engine:Pipeline, tokenConfigured:boolean, extraOrigin?:string, checkService?:()=>Promise<void>, access?:ServerAccess) {
   const app=Fastify({logger:false,bodyLimit:64*1024,requestTimeout:600000});
@@ -48,16 +50,19 @@ export async function createServer(engine:Pipeline, tokenConfigured:boolean, ext
     reply.code(known?error.statusCode:badJson?400:tooLarge?413:500).send(known?publicError(error):badJson?{code:"INVALID_JSON",message:"请求 JSON 无效。"}:tooLarge?{code:"BODY_TOO_LARGE",message:"请求超过大小上限。"}:publicError(error));
   });
   app.addContentTypeParser("application/octet-stream",(request,payload,done)=>{
-    if(request.method!=="POST"||request.url.split("?")[0]!=="/api/videos") {done(new AppError("INVALID_CONTENT_TYPE","此接口不接受二进制请求。",415));return;}
+    const path=request.url.split('?')[0]!;
+    if(request.method!=="POST"||!["/api/videos","/api/images"].includes(path)) {done(new AppError("INVALID_CONTENT_TYPE","此接口不接受二进制请求。",415));return;}
     done(null,payload);
   });
   app.get("/api/health",async()=>{
     let processingReady=tokenConfigured;
     if(checkService)try{await checkService();}catch{processingReady=false;}
     // Cloud failure must not disable local previews, downloads or cached re-exports.
-    return {ok:true,service:"bria-cutout-api",phase:"pipeline",tokenConfigured,processingReady};
+    return {ok:true,service:"bria-cutout-api",phase:"pipeline",tokenConfigured,processingReady,imageWhiteEnabled:engine.images.available,imageWhiteProviders:engine.images.providers,klingVideoEnabled:engine.imageVideos.available};
   });
   app.get("/api/config",async()=>PUBLIC_CONFIG);
+  registerImageRoutes(app,engine.images);
+  registerImageVideoRoutes(app,engine.imageVideos);
   app.post("/api/videos",async(request,reply)=>{
     if(!(request.body instanceof Readable))throw new AppError("INVALID_UPLOAD","请以二进制流上传视频。",415);
     const declared=Number(request.headers["content-length"]);

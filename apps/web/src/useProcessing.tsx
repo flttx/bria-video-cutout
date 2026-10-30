@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, importVideo, serverEnabled } from "./api";
+import { api, apiUrl, ApiError, importVideo, serverEnabled } from "./api";
 import useBackendHealth from "./useBackendHealth";
 import { nativeEnabled } from './browser/native';
 import type { ExportResult, Job, JobInput } from "./api";
@@ -281,7 +281,7 @@ export default function useProcessing(props:Props) {
     {message&&<p className="error-text" role="alert">{message}</p>}
     {pending&&!busy&&<button className="outline-button" onClick={()=>void action(async()=>{try{const existing=await api<Job>(`/api/jobs/${pending.id}`);setJob(existing);setPending(null);store(PENDING_JOB,null);}catch(e){if(e instanceof ApiError&&e.status===404)await submit(pending);else throw e;}})}>恢复未确认的提交</button>}
   </section>;
-  const result = output&&<div className="result-panel"><h3>导出成品 · {props.colorLabel(output.color)} · {outputSpec}</h3>{output.state==="completed"&&changed&&<p className="pending-change" role="status">待应用：{props.colorLabel(props.color)} · {targetSpec}。当前预览和下载仍是{props.colorLabel(output.color)} · {outputSpec}。</p>}{output.state==="completed"&&output.downloadUrl?<><video key={output.id} src={output.downloadUrl} controls preload="metadata" playsInline aria-label="导出成品预览"/><div className="result-info"><p className="helper">{output.meta?.width} × {output.meta?.height} · {output.meta?.duration.toFixed(2)} 秒 · {((output.bytes??0)/1024/1024).toFixed(1)} MB · {output.meta?.hasAudio?"含音轨":"无音轨"}</p><a className={`${changed?"outline-button":"primary-button"} download-link`} href={output.downloadUrl} download="cutout.mp4">{changed?"下载当前成品":"下载 MP4"}</a></div></>:<div className="result-empty" role={output.state==="failed"?"alert":"status"}><p className={output.state==="failed"?"error-text":"helper"}>{output.state==="failed"?"暂未生成成品，请查看任务记录中的失败原因。":"成品生成后可在这里预览，请在任务记录中查看进度。"}</p></div>}</div>;
+  const result = output&&<div className="result-panel"><h3>导出成品 · {props.colorLabel(output.color)} · {outputSpec}</h3>{output.state==="completed"&&changed&&<p className="pending-change" role="status">待应用：{props.colorLabel(props.color)} · {targetSpec}。当前预览和下载仍是{props.colorLabel(output.color)} · {outputSpec}。</p>}{output.state==="completed"&&output.downloadUrl?<><video key={output.id} src={apiUrl(output.downloadUrl)} controls preload="metadata" playsInline aria-label="导出成品预览"/><div className="result-info"><p className="helper">{output.meta?.width} × {output.meta?.height} · {output.meta?.duration.toFixed(2)} 秒 · {((output.bytes??0)/1024/1024).toFixed(1)} MB · {output.meta?.hasAudio?"含音轨":"无音轨"}</p><a className={`${changed?"outline-button":"primary-button"} download-link`} href={apiUrl(output.downloadUrl)} download="cutout.mp4">{changed?"下载当前成品":"下载 MP4"}</a></div></>:<div className="result-empty" role={output.state==="failed"?"alert":"status"}><p className={output.state==="failed"?"error-text":"helper"}>{output.state==="failed"?"暂未生成成品，请查看任务记录中的失败原因。":"成品生成后可在这里预览，请在任务记录中查看进度。"}</p></div>}</div>;
   const visibleHistory=history.filter(row=>!hiddenHistoryIds.has(row.id));
   const historyView = <><details className="task-history" open={historyOpen} onToggle={event=>setHistoryOpen(event.currentTarget.open)} data-tour="task-history"><summary>任务记录（最近 50 条）</summary>{visibleHistory.length?<p className="helper">直接预览或下载成品；移除记录不会删除已保存的视频。</p>:<p className="helper">暂无任务。提交后可在这里查看进度，完成后预览和下载。</p>}
     <button className="outline-button" disabled={busy} onClick={()=>void refreshHistory()}>刷新记录</button>
@@ -308,7 +308,7 @@ export default function useProcessing(props:Props) {
       <div className="history-entry-main">
         <div className="history-media" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
-          {historyOpen&&completedExport&&item.thumbnailUrl&&<img key={item.latestExport!.id} className="history-thumbnail" src={item.thumbnailUrl} alt="" loading="lazy" onError={event=>{event.currentTarget.style.display="none";}}/>}
+          {historyOpen&&completedExport&&item.thumbnailUrl&&<img key={item.latestExport!.id} className="history-thumbnail" src={apiUrl(item.thumbnailUrl)} alt="" loading="lazy" onError={event=>{event.currentTarget.style.display="none";}}/>}
         </div>
         <div className="history-file">
           <strong title={filename}>{filename}</strong>
@@ -318,7 +318,7 @@ export default function useProcessing(props:Props) {
         <div className="history-actions" role="group" aria-label={`${filename}的操作`}>
           {completedExport&&<>
             <button className="outline-button" onClick={()=>{setHistoryVideoError(null);setHistoryPreview({jobId:item.id,created:`${filename} · ${created}`,output:item.latestExport!});}}>预览视频</button>
-            <a className="primary-button" href={completedExport} download>下载视频</a>
+            <a className="primary-button" href={apiUrl(completedExport)} download>下载视频</a>
           </>}
           {item.state==="failed"&&item.canResume&&<button className="outline-button" disabled={busy} onClick={()=>void resumeTask(item)}>恢复任务</button>}
           {localExport&&state==="failed"&&<button className="outline-button" disabled={busy} onClick={()=>void retryExport(item,attempt)}>重试导出</button>}
@@ -334,9 +334,9 @@ export default function useProcessing(props:Props) {
   })}</details>
     {historyPreview&&<dialog className="history-preview-dialog" ref={historyDialog} aria-labelledby="history-preview-title" onClose={event=>{event.currentTarget.querySelector("video")?.pause();setHistoryPreview(null);}}>
       <div className="history-preview-heading"><div><h2 id="history-preview-title">成品预览</h2><p className="helper">{historyPreview.created}</p></div><button className="outline-button" autoFocus onClick={()=>historyDialog.current?.close()}>关闭预览</button></div>
-      <video className="history-video" src={historyPreview.output.downloadUrl} controls preload="metadata" playsInline aria-label="历史任务成品预览" onError={()=>setHistoryVideoError(historyPreview.output.id)}/>
+      <video className="history-video" src={apiUrl(historyPreview.output.downloadUrl)} controls preload="metadata" playsInline aria-label="历史任务成品预览" onError={()=>setHistoryVideoError(historyPreview.output.id)}/>
       {historyVideoError===historyPreview.output.id&&<p className="error-text" role="alert">视频暂时无法预览，请下载后播放，或检查服务连接。</p>}
-      <div className="history-preview-footer"><p className="helper">{props.colorLabel(historyPreview.output.color)}{historyPreview.output.meta&&` · ${historyPreview.output.meta.width} × ${historyPreview.output.meta.height} · ${historyPreview.output.meta.duration.toFixed(2)} 秒`}</p><a className="outline-button" href={historyPreview.output.downloadUrl} download>下载成品 MP4</a></div>
+      <div className="history-preview-footer"><p className="helper">{props.colorLabel(historyPreview.output.color)}{historyPreview.output.meta&&` · ${historyPreview.output.meta.width} × ${historyPreview.output.meta.height} · ${historyPreview.output.meta.duration.toFixed(2)} 秒`}</p><a className="outline-button" href={apiUrl(historyPreview.output.downloadUrl)} download>下载成品 MP4</a></div>
     </dialog>}
   </>;
 

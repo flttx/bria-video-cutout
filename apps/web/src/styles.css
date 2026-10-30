@@ -108,6 +108,29 @@ footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: va
 }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }
 
+.tool-switch { display:flex; gap:var(--space-2); margin-bottom:var(--space-4); }
+.tool-switch button[aria-pressed="true"] { border-color:var(--brand); color:var(--brand-soft); background:var(--brand-bg); }
+.image-white { border:1px solid var(--line); border-radius:var(--r-md); background:var(--bg-panel); padding:var(--space-5); }
+.image-white-heading, .image-white-actions { display:flex; justify-content:space-between; align-items:center; gap:var(--space-4); flex-wrap:wrap; }
+.image-white h2 { margin:0; font-size:18px; }
+.image-white h3 { font-size:var(--fs-md); margin:0 0 var(--space-2); }
+.image-white-previews { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-4); margin:var(--space-5) 0; }
+.image-white-stage { height:clamp(240px,48vh,560px); border:1px solid var(--line-strong); border-radius:var(--r-sm); display:flex; align-items:center; justify-content:center; overflow:hidden; background:var(--bg-deep); color:var(--tx-sub); }
+.image-white-stage img { width:100%; height:100%; object-fit:contain; }
+.image-white-source:has(img) { background:repeating-conic-gradient(#343431 0% 25%,#272724 0% 50%) 0 / 20px 20px; }
+.image-white-result { background:#fff; }
+.image-white-drop { width:100%; height:100%; border:0; background:transparent; color:var(--tx-body); display:flex; flex-direction:column; gap:var(--space-3); align-items:center; justify-content:center; }
+.image-white-drop span { color:var(--tx-sub); font-size:var(--fs-sm); }
+.image-white-info { min-width:0; flex:1 1 180px; }
+.image-white-info strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.image-white-actions a { text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
+.image-white-history { margin-top:var(--space-5); border-top:1px solid var(--line); padding-top:var(--space-4); }
+.image-white-history ul { list-style:none; padding:0; display:grid; gap:var(--space-2); }
+.image-white-history button { width:100%; display:flex; justify-content:space-between; gap:var(--space-3); text-align:left; }
+.image-white-history button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.image-white-history small { flex-shrink:0; color:var(--tx-sub); }
+@media(max-width:640px) { .image-white { padding:var(--space-3); } .image-white-previews { grid-template-columns:minmax(0,1fr); } .image-white-stage { height:280px; } }
+
 /* Processing flow uses the same local workspace tokens. */
 .settings-fields, .processing-options { border: 0; padding: 0; margin: 0; min-width: 0; }
 .processing-options { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--line); }
@@ -273,3 +296,14 @@ a { color: var(--brand-soft); text-underline-offset: 3px; }
   .workspace { gap: 0; }
   .controls-panel { border-right: 0; border-bottom: 1px solid var(--line); }
 }
+.image-provider { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:12px 0; }
+.image-provider select { max-width:100%; padding:8px; color:var(--tx-body); background:var(--bg-panel); border:1px solid var(--line); border-radius:6px; }
+.image-provider .helper { flex:1 1 280px; margin:0; }
+.tool-switch { flex-wrap:wrap; }
+.portrait-video-stage { width:min(100%,315px); aspect-ratio:9/16; margin-inline:auto; display:grid; place-items:center; position:relative; overflow:hidden; border-radius:var(--r-sm); background:#fff; color:#444; text-align:center; }
+.portrait-video-stage > p { padding:16px; }
+.portrait-video-stage video { position:absolute; inset:0; display:block; width:100%; height:100%; object-fit:contain; }
+.portrait-video-actions { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:12px; margin-top:12px; }
+.image-video-workspace .image-white-stage { width:min(100%,315px); height:auto; aspect-ratio:9/16; margin-inline:auto; }
+.portrait-video-dialog { width:min(480px,calc(100% - 32px)); padding:16px; }
+.portrait-video-dialog .portrait-video-stage { width:min(100%,calc((100dvh - 160px) * 9 / 16)); }

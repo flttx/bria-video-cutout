@@ -26,7 +26,7 @@ try {
     & (Join-Path $repoRoot 'deploy/standalone/build-release.ps1') -Tag $tag -TokenFile $tokenFile
     $expected = @('compose.yaml','DEPLOY.md','images.tar','RELEASE.txt','SHA256SUMS','PRIVATE_ACCESS.txt')
     $actual = @(Get-ChildItem -LiteralPath $releaseDir -File | ForEach-Object Name | Sort-Object)
-    if (Compare-Object $actual ($expected | Sort-Object)) { throw 'Release must contain only the private runtime artifacts' }
+    if (Compare-Object $actual ($expected | Sort-Object)) { throw "Release must contain only the private runtime artifacts. Actual: $($actual -join ', ')" }
     $compose = [IO.File]::ReadAllText((Join-Path $releaseDir 'compose.yaml'))
     if ($compose -match '(?m)^\s*(build|context):' -or $compose -match '\.\./\.\.') { throw 'Runtime compose depends on source checkout' }
     if ($compose -notmatch "bria-cutout-api:$tag" -or $compose -match 'BRIA_API_TOKEN|CUTOUT_PROXY_TOKEN:|RELEASE_TAG') { throw 'Incorrect version or exposed credential' }

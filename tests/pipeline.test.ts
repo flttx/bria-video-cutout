@@ -10,6 +10,7 @@ import { AppError } from '../apps/api/src/errors.js';
 import { parseJob } from '../apps/api/src/model.js';
 import type { JobRecord, VideoRecord, ExportRecord } from '../apps/api/src/model.js';
 import { BriaClient } from '../apps/api/src/bria/client.js';
+import { BriaCallError } from '../apps/api/src/bria/diagnostics.js';
 import type { BriaGateway } from '../apps/api/src/bria/client.js';
 import { createServer } from '../apps/api/src/app.js';
 
@@ -27,7 +28,7 @@ class FakeBria implements BriaGateway {
   async autoForeground(_v:string,color?:string){this.kind=color?'direct':'alpha';return this.submit();}
   async maskByPrompt(){this.kind='mask';return this.submit();}
   async maskByPoints(_v:string,frame:number,points:unknown){this.kind='mask';this.lastFrame=frame;this.lastPoints=points;return this.submit();}
-  async submit(){this.submissions++;if(this.failSubmit)throw new AppError('BRIA_NETWORK','提交网络中断');return {request_id:'request-test-12345'};}
+  async submit(){this.submissions++;if(this.failSubmit)throw new BriaCallError('BRIA_NETWORK','提交网络中断',{operation:'mask_by_prompt',stage:'network',elapsedMs:10000,networkCode:'UND_ERR_CONNECT_TIMEOUT'});return {request_id:'request-test-12345'};}
   async status(){if(this.failPoll)throw new AppError('TEST_POLL','测试查询失败');return {status:'COMPLETED' as const,result:{mask_url:'https://example.invalid/private-mask',video_url:'https://example.invalid/private-video'}};}
   async download(_url:string,path:string){await copyFile(this.kind==='alpha'?alpha:this.kind==='direct'?source:mask,path);}
 }
@@ -104,8 +105,12 @@ test('query failure and restart recover the accepted request without resubmissio
 test('ambiguous submit is never automatically retried after restart',async()=>{
   const {engine,input,bria,store}=await fixture();bria.failSubmit=true;await engine.create(input);await engine.idle();
   const job=await store.get<JobRecord>('jobs',input.id);assert.equal(job.error?.code,'SUBMISSION_UNCERTAIN');assert.equal(job.canResume,false);
+  assert.equal(job.lastFailure?.code,'BRIA_NETWORK');assert.equal(job.lastFailure?.stage,'submitting');
+  assert.equal(job.lastFailure?.upstream?.networkCode,'UND_ERR_CONNECT_TIMEOUT');
+  assert.equal('lastFailure' in jobView(job),false,'internal diagnostics must not be returned to clients');
   job.state='submitting';await store.save('jobs',job);
   const restarted=new Pipeline(store,bria,1,2000);await restarted.initialize();await restarted.idle();assert.equal(bria.submissions,1);
+  assert.equal((await store.get<JobRecord>('jobs',job.id)).lastFailure?.upstream?.networkCode,'UND_ERR_CONNECT_TIMEOUT');
   await assert.rejects(restarted.resume(job.id),/不能自动恢复/);
 });
 test('local HTTP upload probes content, blocks cross-origin POST and hides errors',async()=>{

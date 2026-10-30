@@ -46,19 +46,20 @@ http { types { text/html html; text/css css; application/javascript js; } ${site
     execFileSync(process.env.NGINX_TEST_EXECUTABLE,['-p',nginxPrefix,'-c','nginx.conf','-t'],{windowsHide:true,stdio:'pipe'});
     nginx=spawn(process.env.NGINX_TEST_EXECUTABLE,['-p',nginxPrefix,'-c','nginx.conf'],{windowsHide:true,stdio:'ignore'});
     let ready=false;
-    for(let i=0;i<80;i++){try{const response=await fetch('http://127.0.0.1:5186/api/health');assert.equal(response.status,401);ready=true;break;}catch{await delay(100);}}
+    for(let i=0;i<80;i++){try{const response=await fetch('http://127.0.0.1:5186/bria-cutout/api/health');assert.equal(response.status,401);ready=true;break;}catch{await delay(100);}}
     assert.ok(ready,'Nginx must start with the deployment routing configuration');
     assert.equal((await fetch('http://127.0.0.1:5186/')).status,401);
-    assert.equal((await fetch('http://127.0.0.1:5186/api/jobs',{headers:{'X-Cutout-Proxy-Token':token}})).status,401);
-    assert.equal((await fetch('http://127.0.0.1:5186/api/health',{headers:{Authorization:'Basic '+Buffer.from('synthetic:wrong').toString('base64')}})).status,401);
+    assert.equal((await fetch('http://127.0.0.1:5186/bria-cutout/api/jobs',{headers:{'X-Cutout-Proxy-Token':token}})).status,401);
+    assert.equal((await fetch('http://127.0.0.1:5186/bria-cutout/api/health',{headers:{Authorization:'Basic '+Buffer.from('synthetic:wrong').toString('base64')}})).status,401);
   } else {
     process.env.CUTOUT_API_BASE_URL=address;
+    process.env.CUTOUT_API_PATH_PREFIX='';
     process.env.CUTOUT_API_USERNAME='admin';
     process.env.CUTOUT_API_PASSWORD=token;
     // Use the real startup-configured proxy, without a test-only header injection.
     server=await preview({configFile:resolve('apps/web/vite.config.ts'),root:resolve('apps/web'),mode:'server',preview:{host:'127.0.0.1',port:5186,strictPort:true}});
     assert.equal((await fetch(address+'/api/health')).status,401);
-    assert.equal((await fetch('http://127.0.0.1:5186/api/health')).status,200);
+    assert.equal((await fetch('http://127.0.0.1:5186/bria-cutout/api/health')).status,200);
   }
   let executablePath=process.env.BROWSER_TEST_EXECUTABLE;
   if(!executablePath&&process.platform==='win32')for(const candidate of ['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe']){try{await access(candidate);executablePath=candidate;break;}catch{}}
@@ -66,7 +67,7 @@ http { types { text/html html; text/css css; application/javascript js; } ${site
   const context=await browser.newContext({viewport:{width:1440,height:1000},...(nginx?{httpCredentials:{username:'synthetic',password:'synthetic-password'}}:{})});
   await context.addInitScript(()=>{for(const mode of ['auto','prompt','points'])localStorage.setItem('bria-cutout.guide.'+mode+'.v1','1');});
   const forbidden=[],errors=[];
-  await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.hostname!=='127.0.0.1'||/^\/(browser|native|ffmpeg)\//.test(url.pathname)){forbidden.push(url.pathname);return route.abort();}return route.continue();});
+  await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.hostname!=='127.0.0.1'||/^\/(api|browser|native|ffmpeg)\//.test(url.pathname)){forbidden.push(url.pathname);return route.abort();}return route.continue();});
   let page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto('http://127.0.0.1:5186');
   await page.getByText('服务器处理模式',{exact:true}).waitFor();

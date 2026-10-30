@@ -2,7 +2,7 @@
 
 新增 **[独立 API 服务端](docs/STANDALONE_SERVER.md)**：供单独网页或 APP 调用。本地构建一个内置服务端 Bria Token 的私有镜像，服务器执行 `docker load -i images.tar`、`docker compose up -d`；镜像不包含网页、Nginx 或 Caddy。支持独立接口认证和精确 CORS，启动及接入命令见 [镜像交付与启动命令](docs/镜像交付与启动命令.md)。以下原架构与开发命令继续保留。
 
-在线网页 + Cloudflare API + 本地 FFmpeg 的视频抠图工具。线上普通模式只需打开部署后的 HTTPS 网址，在浏览器内处理；本地原生模式通过 Node.js 调用 ffmpeg.exe 合成与编码。AI 仅使用 Bria。
+在线网页 + Cloudflare API + 本地 FFmpeg 的视频抠图工具。线上普通模式只需打开部署后的 HTTPS 网址，在浏览器内处理；本地原生模式通过 Node.js 调用 ffmpeg.exe 合成与编码。视频抠图使用 Bria；独立服务另支持 Bria / Tripo 图片处理、Tripo 建模和可灵图生视频。
 
 ## 当前架构
 
@@ -18,6 +18,17 @@
 
 ## 功能与边界
 
+图生 3D 及模型渲染链路已移除；历史模型/视频文件保留在数据目录，但不再提供网页入口或模型 API。
+
+
+服务器处理模式的 **图片白底** 入口：选择 PNG/JPG 上传后自动生成白底旋转视频。页面只展示原图和最终视频，移除中间白底 PNG 预览/下载、单独图片生成按钮和 API 切换；Bria 白底图保留在服务器供可灵使用。服务端原有 Bria / Tripo 图片 API 与缓存仍保留。
+
+服务端自动完成 Bria 白底 PNG → 可灵 3.0 图生视频 → 下载/校验/保存 MP4。已有白底图片直接复用；请求 1080p、6 秒、无声、固定镜头、相对参考朝向左右约 15° 缓慢轻转，实际动作幅度、颜色和纯白背景需检查。页面关闭后服务端继续处理，刷新后从最近任务恢复；打开历史只查询，上传新图片才自动生成。提交结果不明时按原任务标识查询，不自动重发。可灵视频采用 **9:16 预览及查看弹窗**，按比例完整显示，不裁剪或拉伸；下载视频尺寸保持实际生成规格。
+
+可灵配置模板为 `apps/api/.env.kling.example`，复制为 **`apps/api/.env.kling.local`** 后填写 `KLING_API_KEY`，默认 `KLING_API_REGION=china`（北京端点；国际区用 `global`，新加坡端点），重启 `npm run dev:api`。私有文件已被 Git/Docker 忽略，Key 只在服务端使用。可灵输入宽高均至少 300px、比例 1:2.5 至 2.5:1；原图比例不做裁剪，实际视频尺寸记录在结果中。接口与限制来源见 [SOURCES.md](docs/SOURCES.md)。
+
+本地保护范围：20 MiB、单边 8192px、总像素 2400 万；不支持动图。Bria 需要 `BRIA_TRANSPORT=direct` 与服务端 `BRIA_API_TOKEN`；Tripo 独立配置服务端 `TRIPO_API_KEY`、`TRIPO_API_REGION=china`（默认，国际区用 `global`，需匹配账号）。Tripo 另校验规范化图片不超过 20 MB、宽高至少 14px、宽高比 1:3 至 3:1。所有 Key 仅存服务端，不使用 `VITE_*`。需要更新独立 API 和前端；旧服务器或浏览器模式提示功能未启用。配置与官方来源见 [STANDALONE_SERVER.md](docs/STANDALONE_SERVER.md)、[SOURCES.md](docs/SOURCES.md)。
+
 自动识别、文字描述、正负点三种模式；白色默认，共十种预设纯色；输出尺寸、比例和帧率跟随源片段，MP4／H.264。保留音轨，支持复用 Alpha／Mask 换色；不支持背景图片上传。43 寸设备只播放下载的成片。
 
 Bria 自动模式最长 60 秒：[官方自动接口](https://docs.bria.ai/video-editing/editing/remove-background)。文字／点选最长 5 秒、Mask 最高 750p：[文字接口](https://docs.bria.ai/video-editing/masking/mask-by-prompt)、[点选接口](https://docs.bria.ai/video-editing/masking/mask-by-key-points)。本项目生成 1280×720 范围内代理，按原片尺寸合成；4K 文件不代表原生 4K Mask。约束与工程选择对照见 [SOURCES.md](docs/SOURCES.md)。
@@ -26,16 +37,24 @@ Bria 自动模式最长 60 秒：[官方自动接口](https://docs.bria.ai/video
 
 ## 本地开发（只用于开发，不是用户运行要求）
 
-### 当前默认：前端连接独立 Docker API
+### 当前本机：前端连接源码 API
 
-本次已创建被 Git 忽略的 `apps/web/.env.server.local`，配置 `CUTOUT_API_BASE_URL=http://127.0.0.1:3001`、`CUTOUT_API_USERNAME=admin` 和交付包的接口密码；不是 Bria Token。环境变量由网页启动进程读取，代理统一附加认证，浏览器不需要登录，也不接收接口密码。
+本机被 Git 忽略的 `apps/web/.env.server.local` 已切换为 `CUTOUT_API_BASE_URL=http://127.0.0.1:3001`、`CUTOUT_API_PATH_PREFIX=`。浏览器请求 `/bria-cutout/api/...`，Vite 代理转成后端 `/api/...`。原远端配置已备份到 `.tmp/local-start/`；需要远端时恢复 BASE_URL 为 `http://10.28.111.20`、PATH_PREFIX 为 `/bria-cutout` 并重启前端。接口凭据只由代理读取，不进入网页脚本。
 
 ```powershell
-docker compose -f .tmp/releases/backend-20261028-v1/compose.yaml up -d
+# 终端 1：本机需有 Node.js 22.12+、npm 依赖及 FFmpeg/FFprobe
+npm run dev:api
+# 终端 2
 npm run dev
 ```
 
-打开 **http://localhost:8080**，对应 API 的默认 WEB_ORIGIN。不要改用 `127.0.0.1:8080`，除非同步修改 API 的 WEB_ORIGIN。初次在其他机器配置时，复制 `apps/web/server-config.template` 为 `apps/web/.env.server.local` 并填写接口密码；修改配置后重启前端。默认启动不再依赖本地 Worker/WASM/native 服务。下文是保留的旧开发入口。
+打开 **http://localhost:8080**；`dev:api` 在未显式配置时设置这一 WEB_ORIGIN。不要改用 `127.0.0.1:8080`，除非同步修改 API 的 WEB_ORIGIN。后端从进程环境、`apps/api/.env.kling.local`、`apps/api/.env`、`.env`、`.env.development` 按顺序读取配置，前者优先；平台 Key 仅放服务端。源码 API 仅监听回环地址，默认不启用生产认证；正式部署使用下述独立服务包。
+
+如需切回本机 Docker API，先停止源码 API 释放 3001，再启动交付包，并将其 PRIVATE_ACCESS.txt 中的接口凭据填入前端本地配置。远端部署方式见 [Nginx 独立 API 入口](docs/NGINX_GATEWAY.md)。
+
+### 导出独立服务包（Windows）
+
+启动 Docker Desktop Linux 引擎后运行 `npm run package:server`。默认按时间命名，输出 `.tmp/releases/backend-年月日-时分秒/`，包含 `images.tar`、Compose、访问凭据、启动文档及校验文件；只包含 API，不包含网页或本机历史数据。可用 `npm run package:server -- -Tag 自定义版本 -TokenFile 私有配置文件` 指定版本/配置。默认读取与本地 API 相同的环境配置，包含可选 Tripo / Kling Key；包内镜像含服务端密钥，只作私有交付。不会自动部署或推送镜像。目标机启动步骤见 [镜像交付与启动命令](docs/镜像交付与启动命令.md)。
 
 ### 原 Cloudflare / 浏览器处理入口
 

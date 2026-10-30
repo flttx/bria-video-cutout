@@ -7,11 +7,14 @@
     "apps/*"
   ],
   "scripts": {
+    "dev:api": "node --import tsx scripts/dev-api.mjs",
+    "package:server": "powershell -NoProfile -ExecutionPolicy Bypass -File deploy/standalone/build-release.ps1",
     "dev:server": "npm run dev:server -w apps/web",
     "build:server": "npm run build -w apps/api && npm run build:server -w apps/web",
     "start:server": "node apps/api/dist/server.js",
     "test:server": "node --import tsx --test tests/standalone.test.ts",
     "test:browser:server": "npm run build:server && node --import tsx tests/server-browser.integration.mjs",
+    "test:browser:images": "npm run build:server && node --import tsx tests/images-browser.integration.mjs",
     "dev": "npm run dev -w apps/web",
     "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web && npm run typecheck -w apps/worker",
     "build": "npm run build -w apps/api && npm run build -w apps/web && npm run build -w apps/worker",

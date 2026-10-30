@@ -3,11 +3,16 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { BriaGateway, BriaStatusResponse } from "./bria/client.js";
 import { BriaHttpError } from "./bria/client.js";
+import { BriaCallError } from './bria/diagnostics.js';
 import { AppError, object, publicError } from "./errors.js";
 import { exportOptions, parseJob, validId } from "./model.js";
 import type { ExportRecord, JobRecord, VideoRecord } from "./model.js";
 import { Store } from "./store.js";
 import { prepare, proxy, render, validateArtifact } from "./media.js";
+import { ImagePipeline } from './images.js';
+import type { TripoImageGateway } from './tripo.js';
+import { ImageVideoPipeline } from './image-videos.js';
+import type { KlingGateway } from './kling.js';
 
 export function jobView(job:JobRecord) {
   return { id:job.id, state:job.state, input:job.input, createdAt:job.createdAt, updatedAt:job.updatedAt, exportId:job.exportId, error:job.error, canResume:job.canResume??false, reusable:job.artifact!=="direct", warning:job.warning, sourceMeta:job.sourceMeta&&{width:job.sourceMeta.width,height:job.sourceMeta.height,fps:job.sourceMeta.fps} };
@@ -16,10 +21,15 @@ export function exportView(item:ExportRecord) {
   return {...item, downloadUrl:item.state==="completed"?`/api/exports/${item.id}/file`:undefined};
 }
 export class Pipeline {
+  readonly images:ImagePipeline;
+  readonly imageVideos:ImageVideoPipeline;
   private queue:Promise<void>=Promise.resolve();
   private mutation:Promise<void>=Promise.resolve();
   private active=new Set<string>();
-  constructor(readonly store:Store,private readonly bria:BriaGateway|undefined,private readonly pollMs=5000,private readonly pollTimeout=1_800_000,private readonly gateways:Partial<Record<"direct"|"cloud",BriaGateway>>={}) {}
+  constructor(readonly store:Store,private readonly bria:BriaGateway|undefined,private readonly pollMs=5000,private readonly pollTimeout=1_800_000,private readonly gateways:Partial<Record<"direct"|"cloud",BriaGateway>>={},tripo?:TripoImageGateway,kling?:KlingGateway) {
+    this.images=new ImagePipeline(store,bria,pollMs,pollTimeout,tripo);
+    this.imageVideos=new ImageVideoPipeline(store,this.images,kling,pollMs,pollTimeout);
+  }
   private gateway(job:JobRecord) {
     const mode=job.transport??"direct";
     const gateway=this.gateways[mode]??((this.bria?.kind??"direct")===mode?this.bria:undefined);
@@ -41,7 +51,7 @@ export class Pipeline {
       console.error("LOCAL_JOB_STORAGE_FAILURE");
     }).finally(()=>this.active.delete(key));
   }
-  async idle() {await this.queue;}
+  async idle() {await this.queue;await this.images.idle();await this.imageVideos.idle();}
   async setHistoryRemoved(id:string,removed:boolean):Promise<void> {
     await this.exclusive(async()=>{
       const job=await this.store.get<JobRecord>("jobs",validId(id));
@@ -57,6 +67,8 @@ export class Pipeline {
     });
   }
   async initialize() {
+    await this.images.initialize();
+    await this.imageVideos.initialize();
     const jobs=await this.store.list<JobRecord>("jobs");
     for(const job of jobs) {
       if(job.state!=="completed"&&job.state!=="failed") this.enqueue(`job:${job.id}`,()=>this.run(job.id));
@@ -200,6 +212,10 @@ export class Pipeline {
       // A rejected 4xx POST has no accepted task; explicit resume can submit after correction.
       if(job.transport!=="cloud"&&job.state==="submitting" && e instanceof BriaHttpError && e.httpStatus>=400 && e.httpStatus<500&&e.httpStatus!==408)job.submissionAttempted=false;
       job.error=publicError(e);
+      const failure={stage:job.state,code:job.error.code,at:new Date().toISOString(),...(e instanceof BriaCallError?{upstream:e.diagnostic}:{})};
+      // A restart's submission guard must not erase the original transport failure.
+      if(failure.code!=='SUBMISSION_UNCERTAIN'||!job.lastFailure)job.lastFailure=failure;
+      console.warn(JSON.stringify({event:'cutout.job_failed',jobId:job.id,...failure}));
       job.canResume=!!job.artifactReady || (!!job.requestId && !["BRIA_TERMINAL","BRIA_HTTP_404"].includes(job.error.code)) || !job.submissionAttempted;
       if(job.transport==="cloud"&&job.cloudJobId&&job.submissionAttempted) {
         // Resume means lookup only, except the explicitly confirmed rejection handled above.

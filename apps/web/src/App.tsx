@@ -1,4 +1,5 @@
 import useProcessing from "./useProcessing";
+import ImageWhite from './ImageWhite';
 import { nativeEnabled } from './browser/native';
 import GuidedTour, { type TourStep } from "./GuidedTour";
 import { api, importVideo, previewVideo, serverEnabled } from "./api";
@@ -40,6 +41,7 @@ function formatTime(time: number): string {
 }
 
 export default function App() {
+  const [tool,setTool]=useState<'video'|'image'>('video');
   const viewerRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -308,6 +310,12 @@ export default function App() {
         <div className="header-tags"><span role="status" className={"status " + apiState}>{apiState === "online" ? (serverEnabled?"服务器处理模式":nativeEnabled?"本机 FFmpeg 导出模式":"浏览器处理已就绪") : apiState === "offline" ? "处理环境不可用" : "正在检查环境"}</span></div>
       </header>
 
+      <nav className="tool-switch" aria-label="处理类型">
+        <button className="outline-button" aria-pressed={tool==='video'} onClick={()=>setTool('video')}>视频抠图</button>
+        <button className="outline-button" aria-pressed={tool==='image'} onClick={()=>{viewerRef.current?.querySelectorAll('video').forEach(video=>video.pause());setGuideMode(null);setTool('image');}}>图片白底</button>
+      </nav>
+      {tool==='image'&&<ImageWhite/>}
+      <div hidden={tool!=='video'}>
       <div className="workspace">
         <aside className="controls-panel" aria-label="参数设置">
           <fieldset className="settings-fields" disabled={processing}>
@@ -388,6 +396,7 @@ export default function App() {
         </section>
       </div>
       {guideMode&&<GuidedTour key={guideMode} modeLabel={MODES.find(item=>item.id===guideMode)!.buttonLabel} steps={guideSteps} onClose={closeGuide}/>}
+      </div>
 
     </main>
   );
